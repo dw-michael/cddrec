@@ -11,7 +11,7 @@ import argparse
 import json
 
 from cddrec.models import CDDRec
-from cddrec.data import SeqRecDataset, create_dataloader
+from cddrec.data import setup_data_from_file
 from cddrec.training import train, load_checkpoint
 from cddrec.utils import set_seed, count_parameters
 
@@ -23,8 +23,8 @@ def parse_args():
     # Data arguments
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to processed data file (.json)")
-    parser.add_argument("--num_items", type=int, required=True,
-                        help="Total number of items")
+    parser.add_argument("--num_workers", type=int, default=0,
+                        help="Number of dataloader workers")
 
     # Model arguments
     parser.add_argument("--embedding_dim", type=int, default=128,
@@ -88,20 +88,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_data(data_path: str):
-    """Load processed data from JSON file"""
-    with open(data_path, "r") as f:
-        data = json.load(f)
-
-    train_sequences = data["train"]["sequences"]
-    train_targets = data["train"]["targets"]
-
-    val_sequences = data["val"]["sequences"]
-    val_targets = data["val"]["targets"]
-
-    return (train_sequences, train_targets), (val_sequences, val_targets)
-
-
 def main():
     args = parse_args()
 
@@ -112,45 +98,23 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Load data
-    print("Loading data...")
-    (train_sequences, train_targets), (val_sequences, val_targets) = load_data(args.data_path)
-
-    print(f"Train samples: {len(train_sequences)}")
-    print(f"Val samples: {len(val_sequences)}")
-
-    # Create datasets
-    train_dataset = SeqRecDataset(
-        sequences=train_sequences,
-        targets=train_targets,
-        num_items=args.num_items,
-        max_seq_len=args.max_seq_len,
-    )
-
-    val_dataset = SeqRecDataset(
-        sequences=val_sequences,
-        targets=val_targets,
-        num_items=args.num_items,
-        max_seq_len=args.max_seq_len,
-    )
-
-    # Create dataloaders
-    train_loader = create_dataloader(
-        train_dataset,
+    # Load data and create dataloaders
+    print("Loading data and creating dataloaders...")
+    data = setup_data_from_file(
+        json_path=args.data_path,
         batch_size=args.batch_size,
-        shuffle=True,
+        max_seq_len=args.max_seq_len,
+        num_workers=args.num_workers,
     )
 
-    val_loader = create_dataloader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-    )
+    print(f"Users: {data.num_users}, Items: {data.num_items}")
+    print(f"Train samples: {len(data.train_dataset)}")
+    print(f"Val samples: {len(data.val_dataset)}")
 
     # Create model
     print("\nInitializing model...")
     model = CDDRec(
-        num_items=args.num_items,
+        num_items=data.num_items,
         embedding_dim=args.embedding_dim,
         encoder_layers=args.encoder_layers,
         decoder_layers=args.decoder_layers,
@@ -177,8 +141,8 @@ def main():
     print("\nStarting training...")
     history = train(
         model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
+        train_loader=data.train_loader,
+        val_loader=data.val_loader,
         optimizer=optimizer,
         device=device,
         num_epochs=args.num_epochs,

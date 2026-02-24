@@ -127,11 +127,20 @@ def validate(
     for batch in val_loader:
         # Move to device
         sequence = batch["sequence"].to(device)
+        seq_len = batch["seq_len"].to(device)
 
-        # Split into input and target
-        # For validation: use all but last item as input, last item as target
-        item_seq = sequence[:, :-1]
-        target_item = sequence[:, -1]
+        # Extract targets using advanced indexing (last real item from each sequence)
+        from cddrec.data import extract_targets
+        target_item = extract_targets(sequence, seq_len)
+
+        # Prepare input: exclude target from each sequence
+        # For seq [1,2,3,4,5,0,0,0] with len=5, we want input [1,2,3,4,0,0,0,0]
+        item_seq = sequence.clone()
+        batch_size = sequence.shape[0]
+        for i in range(batch_size):
+            # Zero out from target position onward
+            target_pos = seq_len[i] - 1
+            item_seq[i, target_pos:] = 0
 
         # Create padding mask for input
         padding_mask = create_padding_mask(item_seq)

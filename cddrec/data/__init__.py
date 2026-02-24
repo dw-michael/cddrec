@@ -1,20 +1,30 @@
 """Data handling utilities for CDDRec"""
 
-from .dataset import SeqRecDataset, create_dataloader, collate_fn
+from .dataset import (
+    SeqRecDataset,
+    create_dataloader,
+    collate_fn,
+    extract_targets,
+    DataBundle,
+    setup_data_from_file,
+)
 from .augmentation import mask_sequence, shuffle_sequence, crop_sequence, augment_sequence, create_padding_mask
 from .preprocessing import (
-    filter_interactions,
-    create_sequences,
-    train_val_test_split,
-    save_processed_data,
     preprocess_interactions,
+    load_processed_data,
+    load_id_mappings,
+    create_reverse_mappings,
 )
+from .types import SplitData, ProcessedData, PreprocessingResult
 
 __all__ = [
     # Dataset
     "SeqRecDataset",
     "create_dataloader",
     "collate_fn",
+    "extract_targets",
+    "DataBundle",
+    "setup_data_from_file",
     # Augmentation
     "mask_sequence",
     "shuffle_sequence",
@@ -22,9 +32,12 @@ __all__ = [
     "augment_sequence",
     "create_padding_mask",
     # Preprocessing
-    "filter_interactions",
-    "create_sequences",
-    "train_val_test_split",
-    "save_processed_data",
     "preprocess_interactions",
+    "load_processed_data",
+    "load_id_mappings",
+    "create_reverse_mappings",
+    # Types
+    "SplitData",
+    "ProcessedData",
+    "PreprocessingResult",
 ]

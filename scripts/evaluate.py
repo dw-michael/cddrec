@@ -11,7 +11,7 @@ import argparse
 import json
 
 from cddrec.models import CDDRec
-from cddrec.data import SeqRecDataset, create_dataloader
+from cddrec.data import setup_data_from_file
 from cddrec.training import load_checkpoint, validate
 from cddrec.utils import set_seed
 
@@ -23,8 +23,6 @@ def parse_args():
     # Data arguments
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to processed data file (.json)")
-    parser.add_argument("--num_items", type=int, required=True,
-                        help="Total number of items")
     parser.add_argument("--split", type=str, default="test",
                         choices=["val", "test"],
                         help="Dataset split to evaluate on")
@@ -56,17 +54,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_data(data_path: str, split: str):
-    """Load processed data from JSON file"""
-    with open(data_path, "r") as f:
-        data = json.load(f)
-
-    sequences = data[split]["sequences"]
-    targets = data[split]["targets"]
-
-    return sequences, targets
-
-
 def main():
     args = parse_args()
 
@@ -77,30 +64,29 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Load data
-    print(f"Loading {args.split} data...")
-    sequences, targets = load_data(args.data_path, args.split)
-    print(f"{args.split.capitalize()} samples: {len(sequences)}")
-
-    # Create dataset
-    dataset = SeqRecDataset(
-        sequences=sequences,
-        targets=targets,
-        num_items=args.num_items,
+    # Load data and create dataloaders
+    print("Loading data...")
+    data = setup_data_from_file(
+        json_path=args.data_path,
+        batch_size=args.batch_size,
         max_seq_len=args.max_seq_len,
     )
 
-    # Create dataloader
-    dataloader = create_dataloader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-    )
+    # Select the appropriate split
+    if args.split == "val":
+        dataloader = data.val_loader
+        dataset = data.val_dataset
+    else:  # test
+        dataloader = data.test_loader
+        dataset = data.test_dataset
+
+    print(f"Items: {data.num_items}")
+    print(f"{args.split.capitalize()} samples: {len(dataset)}")
 
     # Create model
     print("\nInitializing model...")
     model = CDDRec(
-        num_items=args.num_items,
+        num_items=data.num_items,
         embedding_dim=args.embedding_dim,
         encoder_layers=args.encoder_layers,
         decoder_layers=args.decoder_layers,
