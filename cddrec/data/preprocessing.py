@@ -354,7 +354,7 @@ def _save_data(
     }
 
     with open(output_path, "w") as f:
-        json.dump(data, f)
+        json.dump(data, f, indent=2)
 
     print(f"  Data saved: {output_path}")
     print(f"    Users: {num_users}, Items: {num_items}")
