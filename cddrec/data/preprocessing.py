@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from collections import defaultdict, Counter
 from typing import Iterable
-from .types import ProcessedData, PreprocessingResult
+from .types import ProcessedData, PreprocessingResult, IDMapping, ItemSequence
 
 
 def preprocess_interactions(
@@ -134,14 +134,14 @@ def preprocess_interactions(
 
 def _read_and_index(
     interactions: Iterable[tuple[str | int, str | int, float]]
-) -> tuple[list[tuple[int, int, float]], dict[str | int, int], dict[str | int, int]]:
+) -> tuple[list[tuple[int, int, float]], IDMapping, IDMapping]:
     """
     Single pass: read iterator, build mappings, convert to integers.
 
     Returns integer interactions for memory efficiency (strings discarded immediately).
     """
-    user_mapping: dict[str | int, int] = {}
-    item_mapping: dict[str | int, int] = {}
+    user_mapping: IDMapping = {}
+    item_mapping: IDMapping = {}
     integer_interactions: list[tuple[int, int, float]] = []
 
     user_counter = 0
@@ -224,11 +224,11 @@ def _kcore_filter(
 
 
 def _remap_ids(
-    user_mapping: dict[str | int, int],
-    item_mapping: dict[str | int, int],
+    user_mapping: IDMapping,
+    item_mapping: IDMapping,
     valid_users: set[int],
     valid_items: set[int],
-) -> tuple[dict[str | int, int], dict[str | int, int]]:
+) -> tuple[IDMapping, IDMapping]:
     """
     Remap to continuous IDs after filtering.
 
@@ -255,9 +255,9 @@ def _remap_ids(
 
 def _create_sequences(
     interactions: list[tuple[int, int, float]],
-    user_mapping: dict[str | int, int],
-    item_mapping: dict[str | int, int],
-) -> dict[int, list[int]]:
+    user_mapping: IDMapping,
+    item_mapping: IDMapping,
+) -> dict[int, ItemSequence]:
     """Create user sequences sorted by timestamp."""
     # Build reverse mapping to get back to current indices
     reverse_user = {v: k for k, v in user_mapping.items()}
@@ -284,8 +284,12 @@ def _create_sequences(
 
 
 def _train_val_test_split(
-    user_sequences: dict[int, list[int]]
-) -> tuple[list[list[int]], list[int], list[list[int]], list[int], list[list[int]], list[int]]:
+    user_sequences: dict[int, ItemSequence]
+) -> tuple[
+    list[ItemSequence], list[int],  # train_sequences, train_user_ids
+    list[ItemSequence], list[int],  # val_sequences, val_user_ids
+    list[ItemSequence], list[int],  # test_sequences, test_user_ids
+]:
     """
     Split sequences into train/val/test (one sample per user per split).
 
@@ -340,11 +344,11 @@ def _train_val_test_split(
 
 def _save_data(
     output_path: str,
-    train_sequences: list[list[int]],
+    train_sequences: list[ItemSequence],
     train_user_ids: list[int],
-    val_sequences: list[list[int]],
+    val_sequences: list[ItemSequence],
     val_user_ids: list[int],
-    test_sequences: list[list[int]],
+    test_sequences: list[ItemSequence],
     test_user_ids: list[int],
     num_users: int,
     num_items: int,
@@ -368,8 +372,8 @@ def _save_data(
 
 def _save_mappings(
     output_path: str,
-    user_mapping: dict[str | int, int],
-    item_mapping: dict[str | int, int],
+    user_mapping: IDMapping,
+    item_mapping: IDMapping,
 ):
     """Save ID mappings to separate JSON file."""
     path_obj = Path(output_path)
@@ -448,8 +452,8 @@ def load_id_mappings(json_path: str) -> tuple[dict[str, int], dict[str, int]]:
 
 
 def create_reverse_mappings(
-    user_mapping: dict[str | int, int],
-    item_mapping: dict[str | int, int],
+    user_mapping: IDMapping,
+    item_mapping: IDMapping,
 ) -> tuple[dict[int, str | int], dict[int, str | int]]:
     """
     Create reverse mappings from model IDs → original IDs.

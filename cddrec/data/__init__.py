@@ -15,7 +15,13 @@ from .preprocessing import (
     load_id_mappings,
     create_reverse_mappings,
 )
-from .types import SplitData, ProcessedData, PreprocessingResult
+from .types import (
+    SplitData,
+    ProcessedData,
+    PreprocessingResult,
+    DatasetSample,
+    DatasetBatch,
+)
 
 __all__ = [
     # Dataset
@@ -39,4 +45,6 @@ __all__ = [
     "SplitData",
     "ProcessedData",
     "PreprocessingResult",
+    "DatasetSample",
+    "DatasetBatch",
 ]

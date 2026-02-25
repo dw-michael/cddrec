@@ -5,6 +5,8 @@ from torch.utils.data import Dataset, DataLoader
 from typing import NamedTuple
 import random
 
+from .types import ItemSequence, DatasetSample, DatasetBatch
+
 
 class SeqRecDataset(Dataset):
     """
@@ -20,7 +22,7 @@ class SeqRecDataset(Dataset):
 
     def __init__(
         self,
-        sequences: list[list[int]],
+        sequences: list[ItemSequence],
         num_items: int,
         max_seq_len: int = 20,
         pad_token: int = 0,
@@ -64,7 +66,7 @@ class SeqRecDataset(Dataset):
     def __len__(self) -> int:
         return len(self.full_sequences)
 
-    def _sample_subsequence(self, sequence: list[int]) -> list[int]:
+    def _sample_subsequence(self, sequence: ItemSequence) -> ItemSequence:
         """
         Sample a random contiguous subsequence uniformly over all valid subsequences.
 
@@ -91,7 +93,7 @@ class SeqRecDataset(Dataset):
 
         return sequence[start:end]
 
-    def _pad_sequence(self, seq: list[int]) -> list[int]:
+    def _pad_sequence(self, seq: ItemSequence) -> ItemSequence:
         """Pad or truncate sequence to max_seq_len"""
         if len(seq) > self.max_seq_len:
             # Keep most recent items
@@ -100,7 +102,7 @@ class SeqRecDataset(Dataset):
             # Pad at the end (back-padding)
             return seq + [self.pad_token] * (self.max_seq_len - len(seq))
 
-    def _sample_negatives(self, user_items: list[int]) -> list[int]:
+    def _sample_negatives(self, user_items: ItemSequence) -> ItemSequence:
         """
         Sample negative items for each position in the sequence.
 
@@ -123,7 +125,7 @@ class SeqRecDataset(Dataset):
 
         return negatives
 
-    def __getitem__(self, idx: int) -> dict:
+    def __getitem__(self, idx: int) -> DatasetSample:
         """
         Get a single sample.
 
@@ -131,7 +133,7 @@ class SeqRecDataset(Dataset):
         In val/test mode, uses the full sequence.
 
         Returns:
-            Dictionary with:
+            DatasetSample with:
             - sequence: (max_seq_len,) padded sequence
             - negatives: (max_seq_len,) negative items for each position
             - seq_len: Scalar, length of sequence before padding
@@ -161,15 +163,15 @@ class SeqRecDataset(Dataset):
         return sample
 
 
-def collate_fn(batch: list[dict]) -> dict:
+def collate_fn(batch: list[DatasetSample]) -> DatasetBatch:
     """
     Collate function for DataLoader.
 
     Args:
-        batch: List of samples from dataset
+        batch: List of DatasetSamples from dataset
 
     Returns:
-        Batched dictionary with:
+        DatasetBatch with:
             - sequence: (batch_size, max_seq_len) padded sequences
             - negatives: (batch_size, max_seq_len) negative items
             - seq_len: (batch_size,) sequence lengths (before padding)
