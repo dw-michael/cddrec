@@ -10,7 +10,7 @@ from pathlib import Path
 from cddrec import models
 from .losses import compute_total_loss
 from .utils import evaluate_metrics
-from .data.augmentation import augment_sequence, create_padding_mask
+from .data.augmentation import augment_sequence
 
 
 def train_epoch(
@@ -54,8 +54,8 @@ def train_epoch(
         sequence = batch["sequence"].to(device)
         negatives = batch["negatives"].to(device)
 
-        # Create padding mask
-        padding_mask = create_padding_mask(sequence)
+        # Create padding mask (True for valid positions, False for padding)
+        padding_mask = sequence != 0
 
         # Augment sequence
         sequence_aug = augment_sequence(
@@ -142,8 +142,8 @@ def validate(
             target_pos = seq_len[i] - 1
             item_seq[i, target_pos:] = 0
 
-        # Create padding mask for input
-        padding_mask = create_padding_mask(item_seq)
+        # Create padding mask for input (True for valid positions, False for padding)
+        padding_mask = item_seq != 0
 
         # Generate predictions
         scores = model.forward_inference(item_seq, padding_mask)

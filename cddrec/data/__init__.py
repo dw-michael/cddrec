@@ -8,7 +8,7 @@ from .dataset import (
     DataBundle,
     setup_data_from_file,
 )
-from .augmentation import mask_sequence, shuffle_sequence, crop_sequence, augment_sequence, create_padding_mask
+from .augmentation import mask_sequence, shuffle_sequence, crop_sequence, augment_sequence
 from .preprocessing import (
     preprocess_interactions,
     load_processed_data,
@@ -30,7 +30,6 @@ __all__ = [
     "shuffle_sequence",
     "crop_sequence",
     "augment_sequence",
-    "create_padding_mask",
     # Preprocessing
     "preprocess_interactions",
     "load_processed_data",

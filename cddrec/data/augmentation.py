@@ -133,17 +133,3 @@ def augment_sequence(
         return augment_sequence(item_seq, aug_type, augmentation_ratio, mask_token)
     else:
         raise ValueError(f"Unknown augmentation type: {augmentation_type}")
-
-
-def create_padding_mask(item_seq: torch.Tensor, pad_token: int = 0) -> torch.Tensor:
-    """
-    Create boolean padding mask from sequence.
-
-    Args:
-        item_seq: (batch_size, seq_len) item IDs
-        pad_token: Padding token ID
-
-    Returns:
-        Padding mask: (batch_size, seq_len) True for valid, False for padding
-    """
-    return item_seq != pad_token
