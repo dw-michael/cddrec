@@ -12,6 +12,9 @@ def mask_sequence(
     """
     Randomly mask items in sequence.
 
+    IMPORTANT: Never masks position 0 to maintain causal attention structure.
+    If position 0 is masked, it creates all-masked attention rows → NaN.
+
     Args:
         item_seq: (batch_size, seq_len) item IDs
         mask_ratio: Fraction of items to mask
@@ -24,11 +27,22 @@ def mask_sequence(
     masked_seq = item_seq.clone()
 
     for i in range(batch_size):
-        num_mask = int(seq_len * mask_ratio)
-        if num_mask > 0:
-            # Randomly select positions to mask
-            mask_positions = random.sample(range(seq_len), num_mask)
-            masked_seq[i, mask_positions] = mask_token
+        # Identify non-padding positions
+        non_padding = (item_seq[i] != mask_token).nonzero(as_tuple=True)[0]
+
+        if len(non_padding) > 1:  # Need at least 2 items to mask some
+            # CRITICAL: Exclude position 0 from masking to prevent all-masked attention rows
+            # In causal attention, position 0 can only attend to itself.
+            # If position 0 is masked, it has no valid attention targets → NaN
+            maskable_positions = non_padding[non_padding > 0].tolist()
+
+            if maskable_positions:
+                num_mask = max(1, int(len(maskable_positions) * mask_ratio))
+                num_mask = min(num_mask, len(maskable_positions))
+
+                # Randomly select positions to mask (excluding position 0)
+                mask_positions = random.sample(maskable_positions, num_mask)
+                masked_seq[i, mask_positions] = mask_token
 
     return masked_seq
 
@@ -39,6 +53,9 @@ def shuffle_sequence(
 ) -> torch.Tensor:
     """
     Randomly shuffle items locally within sequence.
+
+    IMPORTANT: Never shuffles position 0 to maintain causal attention structure.
+    If position 0 contains padding after shuffle, it creates all-masked attention rows → NaN.
 
     Local shuffle maintains some sequential structure while adding noise.
 
@@ -55,14 +72,17 @@ def shuffle_sequence(
     for i in range(batch_size):
         num_shuffle = int(seq_len * shuffle_ratio)
         if num_shuffle > 1:
-            # Randomly select a contiguous segment to shuffle
-            start_pos = random.randint(0, seq_len - num_shuffle)
-            end_pos = start_pos + num_shuffle
+            # CRITICAL: Never start shuffle at position 0 to prevent padding at position 0
+            # Position 0 with causal attention can only attend to itself.
+            # If position 0 becomes padding after shuffle, it has no valid attention targets → NaN
+            if seq_len - num_shuffle >= 1:
+                start_pos = random.randint(1, seq_len - num_shuffle)
+                end_pos = start_pos + num_shuffle
 
-            # Shuffle the segment
-            segment = shuffled_seq[i, start_pos:end_pos].clone()
-            perm = torch.randperm(num_shuffle)
-            shuffled_seq[i, start_pos:end_pos] = segment[perm]
+                # Shuffle the segment (excluding position 0)
+                segment = shuffled_seq[i, start_pos:end_pos].clone()
+                perm = torch.randperm(num_shuffle)
+                shuffled_seq[i, start_pos:end_pos] = segment[perm]
 
     return shuffled_seq
 
@@ -74,6 +94,9 @@ def crop_sequence(
 ) -> torch.Tensor:
     """
     Randomly crop sequence by removing a portion.
+
+    IMPORTANT: Always keeps position 0 to maintain causal attention structure.
+    If position 0 is cropped out, it creates all-masked attention rows → NaN.
 
     Args:
         item_seq: (batch_size, seq_len) item IDs
@@ -92,12 +115,15 @@ def crop_sequence(
             # Keep (seq_len - num_crop) items
             keep_len = seq_len - num_crop
 
-            # Randomly select start position for crop
-            start_pos = random.randint(0, seq_len - keep_len)
+            # CRITICAL: Always start crop at position 0 to prevent padding at position 0
+            # Position 0 with causal attention can only attend to itself.
+            # If position 0 is cropped out, it becomes padding → no valid attention targets → NaN
+            start_pos = 0
             end_pos = start_pos + keep_len
 
             # Create cropped sequence with padding
-            cropped_seq[i, :keep_len] = item_seq[i, start_pos:end_pos]
+            # This simplifies to just keeping the first keep_len items
+            cropped_seq[i, :keep_len] = item_seq[i, :keep_len]
             cropped_seq[i, keep_len:] = pad_token
 
     return cropped_seq
