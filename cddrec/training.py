@@ -153,11 +153,16 @@ def validate(
         # Prepare input: exclude target from each sequence
         # For seq [1,2,3,4,5,0,0,0] with len=5, we want input [1,2,3,4,0,0,0,0]
         item_seq = sequence.clone()
-        batch_size = sequence.shape[0]
-        for i in range(batch_size):
-            # Zero out from target position onward
-            target_pos = seq_len[i] - 1
-            item_seq[i, target_pos:] = 0
+
+        # Create mask: True for positions >= target_pos for each sequence
+        # target_pos = seq_len - 1 (position of target item)
+        max_seq_len = sequence.shape[1]
+        positions = torch.arange(max_seq_len, device=device).unsqueeze(0)  # (1, max_seq_len)
+        target_positions = (seq_len - 1).unsqueeze(1)  # (batch_size, 1)
+        mask_out = positions >= target_positions  # (batch_size, max_seq_len)
+
+        # Zero out target and beyond
+        item_seq[mask_out] = 0
 
         # Generate predictions
         scores = model.forward_inference(item_seq)
