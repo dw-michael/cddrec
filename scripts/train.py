@@ -79,6 +79,14 @@ def parse_args():
     parser.add_argument("--augmentation_ratio", type=float, default=0.2,
                         help="Augmentation intensity")
 
+    # Validation arguments
+    parser.add_argument("--val_sample_ratio", type=float, default=1.0,
+                        help="Fraction of validation data to use per epoch (default: 1.0 = full). "
+                             "E.g., 0.2 = validate on 20%% of data (deterministic sampling). "
+                             "Use < 1.0 to speed up validation during training.")
+    parser.add_argument("--val_sample_seed", type=int, default=42,
+                        help="Random seed for deterministic validation sampling (default: 42)")
+
     # Other arguments
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
@@ -166,6 +174,8 @@ def main():
         margin=args.margin,
         augmentation_type=args.augmentation,
         augmentation_ratio=args.augmentation_ratio,
+        val_sample_ratio=args.val_sample_ratio,
+        val_sample_seed=args.val_sample_seed,
         verbose=verbose,
     )
 

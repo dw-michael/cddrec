@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import time
 import json
+import random
 from pathlib import Path
 from datetime import datetime
 from tqdm.auto import tqdm
@@ -118,6 +119,8 @@ def validate(
     val_loader: DataLoader,
     device: torch.device,
     ks: list = [1, 5, 10],
+    sample_ratio: float = 1.0,
+    sample_seed: int = 42,
     verbose: bool = True,
 ) -> dict[str, float]:
     """
@@ -128,6 +131,10 @@ def validate(
         val_loader: Validation data loader
         device: Device
         ks: K values for Recall@K and NDCG@K
+        sample_ratio: Fraction of validation data to use (default: 1.0 for full validation).
+                     E.g., 0.2 = validate on 20% of data. Sampling is deterministic for
+                     reproducibility (same batches every time with same seed).
+        sample_seed: Random seed for deterministic batch sampling (default: 42)
         verbose: Whether to show progress bar
 
     Returns:
@@ -139,10 +146,23 @@ def validate(
     all_ndcg = {k: [] for k in ks}
     all_mrr = []
 
-    # Create progress bar
-    pbar = tqdm(val_loader, desc="Validating", disable=not verbose, leave=False)
+    # Deterministic sampling: select which batches to process
+    sampled_indices = None
+    if sample_ratio < 1.0:
+        num_batches = len(val_loader)
+        num_sample = max(1, int(num_batches * sample_ratio))
+        rng = random.Random(sample_seed)
+        sampled_indices = set(rng.sample(range(num_batches), num_sample))
 
-    for batch in pbar:
+    # Create progress bar
+    desc = f"Validating ({sample_ratio*100:.0f}%)" if sample_ratio < 1.0 else "Validating"
+    pbar = tqdm(val_loader, desc=desc, disable=not verbose, leave=False)
+
+    for batch_idx, batch in enumerate(pbar):
+        # Skip batch if not in sampled set
+        if sampled_indices is not None and batch_idx not in sampled_indices:
+            continue
+
         # Move to device
         sequence = batch["sequence"].to(device)
         seq_len = batch["seq_len"].to(device)
@@ -200,6 +220,8 @@ def train(
     augmentation_type: str = "random",
     augmentation_ratio: float = 0.2,
     val_metric: str = "val_recall@10",
+    val_sample_ratio: float = 1.0,
+    val_sample_seed: int = 42,
     verbose: bool = True,
 ) -> tuple[dict[str, list], str]:
     """
@@ -219,6 +241,10 @@ def train(
         augmentation_type: Type of augmentation ('mask', 'shuffle', 'crop', 'random')
         augmentation_ratio: Intensity of augmentation (0.0 to 1.0)
         val_metric: Metric to use for early stopping (e.g., 'val_recall@10')
+        val_sample_ratio: Fraction of validation data to use per epoch (default: 1.0).
+                         E.g., 0.2 = validate on 20% of data. Sampling is deterministic.
+                         Use < 1.0 to speed up validation during training.
+        val_sample_seed: Random seed for deterministic validation sampling (default: 42)
         verbose: Whether to show progress bars and detailed output
 
     Returns:
@@ -259,6 +285,8 @@ def train(
             'augmentation_type': augmentation_type,
             'augmentation_ratio': augmentation_ratio,
             'val_metric': val_metric,
+            'val_sample_ratio': val_sample_ratio,
+            'val_sample_seed': val_sample_seed,
         },
         'optimizer': {
             'type': type(optimizer).__name__,
@@ -307,7 +335,12 @@ def train(
         )
 
         # Validate
-        val_metrics = validate(model, val_loader, device, verbose=verbose)
+        val_metrics = validate(
+            model, val_loader, device,
+            sample_ratio=val_sample_ratio,
+            sample_seed=val_sample_seed,
+            verbose=verbose
+        )
 
         # Record history
         history["train_loss"].append(train_losses["train_loss"])
