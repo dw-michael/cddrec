@@ -151,8 +151,7 @@ def main():
     print("\nStarting training...")
     history = train(
         model=model,
-        train_loader=data.train_loader,
-        val_loader=data.val_loader,
+        data=data,
         optimizer=optimizer,
         device=device,
         num_epochs=args.num_epochs,

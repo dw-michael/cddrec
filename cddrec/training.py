@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from tqdm.auto import tqdm
 
-from cddrec import models
+from cddrec import models, data
 from .losses import compute_total_loss
 from .utils import evaluate_metrics
 from .data.augmentation import augment_sequence
@@ -187,8 +187,7 @@ def validate(
 
 def train(
     model: models.CDDRec,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
+    data: data.DataBundle,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     num_epochs: int = 100,
@@ -207,24 +206,26 @@ def train(
 
     Args:
         model: CDDRec model
-        train_loader: Training data loader
-        val_loader: Validation data loader
+        data: DataBundle containing train/val loaders and metadata
         optimizer: Optimizer
         device: Device
         num_epochs: Maximum number of epochs
         early_stopping_patience: Patience for early stopping (None to disable)
         checkpoint_dir: Directory to save checkpoints
         lambda_contrast: Weight for contrastive losses
-        temperature: Temperature
-        margin: Margin
-        augmentation_type: Augmentation type
-        augmentation_ratio: Augmentation ratio
-        val_metric: Metric to use for early stopping
+        temperature: Temperature for contrastive losses
+        margin: Margin for cross-divergence loss
+        augmentation_type: Type of augmentation ('mask', 'shuffle', 'crop', 'random')
+        augmentation_ratio: Intensity of augmentation (0.0 to 1.0)
+        val_metric: Metric to use for early stopping (e.g., 'val_recall@10')
         verbose: Whether to show progress bars and detailed output
 
     Returns:
-        Dictionary with training history
+        Dictionary with training history (train_loss, val_metrics)
     """
+    # Extract loaders from DataBundle
+    train_loader = data.train_loader
+    val_loader = data.val_loader
     # Create checkpoint directory
     checkpoint_path = Path(checkpoint_dir)
     checkpoint_path.mkdir(parents=True, exist_ok=True)
