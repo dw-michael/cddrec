@@ -272,11 +272,11 @@ class Recommender:
             item_history = [self.item_mapping[iid] for iid in user_history if iid in self.item_mapping]
 
         # Prepare sequence
-        item_seq, padding_mask = self._prepare_sequence(item_history)
+        item_seq = self._prepare_sequence(item_history)
 
         # Get scores
         with torch.no_grad():
-            scores = self.model.forward_inference(item_seq, padding_mask)
+            scores = self.model.forward_inference(item_seq)
             scores = scores[0].cpu()  # (num_items,)
 
         # Convert to dictionary
@@ -302,11 +302,11 @@ class Recommender:
         """Core recommendation logic."""
 
         # Prepare sequence
-        item_seq, padding_mask = self._prepare_sequence(item_history)
+        item_seq = self._prepare_sequence(item_history)
 
         # Get scores from model
         with torch.no_grad():
-            scores = self.model.forward_inference(item_seq, padding_mask)
+            scores = self.model.forward_inference(item_seq)
             scores = scores[0]  # (num_items,)
 
         # Filter out seen items if requested
@@ -328,14 +328,13 @@ class Recommender:
 
     def _prepare_sequence(self, item_history: list[int]) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Pad or truncate sequence to max_seq_len and create padding mask.
+        Pad or truncate sequence to max_seq_len.
 
         Args:
             item_history: List of model item IDs
 
         Returns:
             item_seq: (1, max_seq_len) padded sequence tensor
-            padding_mask: (1, max_seq_len) boolean mask (True for valid positions)
         """
         # Truncate if too long
         if len(item_history) > self.max_seq_len:
@@ -349,9 +348,8 @@ class Recommender:
 
         # Create tensors
         item_seq = torch.tensor([padded], dtype=torch.long, device=self.device)
-        padding_mask = item_seq != 0  # True for valid positions, False for padding
 
-        return item_seq, padding_mask
+        return item_seq
 
     def _build_user_histories(self, data: dict) -> dict[int, list[int]]:
         """

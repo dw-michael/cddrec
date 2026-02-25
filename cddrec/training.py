@@ -54,9 +54,6 @@ def train_epoch(
         sequence = batch["sequence"].to(device)
         negatives = batch["negatives"].to(device)
 
-        # Create padding mask (True for valid positions, False for padding)
-        padding_mask = sequence != 0
-
         # Augment sequence
         sequence_aug = augment_sequence(
             sequence,
@@ -70,7 +67,6 @@ def train_epoch(
             sequence=sequence,
             sequence_aug=sequence_aug,
             negatives=negatives,
-            padding_mask=padding_mask,
             lambda_contrast=lambda_contrast,
             temperature=temperature,
             margin=margin,
@@ -142,11 +138,8 @@ def validate(
             target_pos = seq_len[i] - 1
             item_seq[i, target_pos:] = 0
 
-        # Create padding mask for input (True for valid positions, False for padding)
-        padding_mask = item_seq != 0
-
         # Generate predictions
-        scores = model.forward_inference(item_seq, padding_mask)
+        scores = model.forward_inference(item_seq)
 
         # Compute metrics
         metrics = evaluate_metrics(scores, target_item, ks=ks)

@@ -30,6 +30,7 @@ class CDDRec(nn.Module):
         num_diffusion_steps: int = 30,
         noise_schedule: str = "linear",
         max_beta: float = 0.1,
+        padding_idx: int = 0,
     ):
         """
         Args:
@@ -43,12 +44,14 @@ class CDDRec(nn.Module):
             num_diffusion_steps: Number of diffusion steps (T)
             noise_schedule: 'linear' or 'cosine'
             max_beta: Maximum noise variance for linear schedule
+            padding_idx: Index used for padding tokens
         """
         super().__init__()
 
         self.num_items = num_items
         self.embedding_dim = embedding_dim
         self.num_diffusion_steps = num_diffusion_steps
+        self.padding_idx = padding_idx
 
         # Sequence Encoder
         self.encoder = SequenceEncoder(
@@ -58,6 +61,7 @@ class CDDRec(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
             max_seq_len=max_seq_len,
+            padding_idx=padding_idx,
         )
 
         # Conditional Denoising Decoder
@@ -83,21 +87,19 @@ class CDDRec(nn.Module):
         self,
         sequence: torch.Tensor,
         timestep: int,
-        padding_mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass for training at a specific diffusion timestep.
 
         Args:
             sequence: (batch_size, seq_len) full sequence (input + target combined)
             timestep: Diffusion timestep (0 to T-1)
-            padding_mask: (batch_size, seq_len) boolean mask for valid positions
 
         Returns:
             x_0_pred: (batch_size, seq_len-1, embedding_dim) predicted target embeddings
             x_t: (batch_size, seq_len-1, embedding_dim) noised target embeddings
-            input_mask: (batch_size, seq_len-1) mask for input positions
-            target_mask: (batch_size, seq_len-1) mask for target positions
+            input_mask: (batch_size, seq_len-1) True = data, False = padding
+            target_mask: (batch_size, seq_len-1) True = data, False = padding
         """
         batch_size = sequence.size(0)
         device = sequence.device
@@ -106,13 +108,9 @@ class CDDRec(nn.Module):
         input_seq = sequence[:, :-1]  # (batch_size, seq_len-1)
         target_seq = sequence[:, 1:]  # (batch_size, seq_len-1)
 
-        # Slice masks
-        if padding_mask is not None:
-            input_mask = padding_mask[:, :-1]  # (batch_size, seq_len-1)
-            target_mask = padding_mask[:, 1:]  # (batch_size, seq_len-1)
-        else:
-            input_mask = None
-            target_mask = None
+        # Create masks for loss computation: True = data, False = padding
+        input_mask = input_seq != self.padding_idx  # (batch_size, seq_len-1)
+        target_mask = target_seq != self.padding_idx  # (batch_size, seq_len-1)
 
         # 1. Encode input sequence
         encoded_seq = self.encoder(input_seq, input_mask)
@@ -135,18 +133,19 @@ class CDDRec(nn.Module):
     def forward_inference(
         self,
         item_seq: torch.Tensor,
-        padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Forward pass for inference (generation).
 
         Args:
             item_seq: (batch_size, seq_len) historical item IDs
-            padding_mask: (batch_size, seq_len) boolean mask for valid positions
 
         Returns:
             scores: (batch_size, num_items) prediction scores for all items
         """
+        # Create mask: True = data, False = padding
+        padding_mask = item_seq != self.padding_idx
+
         # 1. Encode historical sequence
         encoded_seq = self.encoder(item_seq, padding_mask)
 
@@ -192,7 +191,6 @@ class CDDRec(nn.Module):
         self,
         sequence: torch.Tensor | None = None,
         item_seq: torch.Tensor | None = None,
-        padding_mask: torch.Tensor | None = None,
         timestep: int | None = None,
         mode: str = "train",
     ):
@@ -202,11 +200,11 @@ class CDDRec(nn.Module):
         Args:
             sequence: (batch_size, seq_len) full sequence (for training mode)
             item_seq: (batch_size, seq_len) input sequence (for inference mode)
-            padding_mask: (batch_size, seq_len) boolean mask
+            timestep: Diffusion timestep (for training mode)
             mode: 'train' or 'inference'
 
         Returns:
-            Training mode: (x_0_pred, x_t, timesteps, input_mask, target_mask)
+            Training mode: (x_0_pred, x_t, input_mask, target_mask)
             Inference mode: scores
         """
         if mode == "train":
@@ -214,10 +212,10 @@ class CDDRec(nn.Module):
                 raise ValueError("sequence required for training mode")
             if timestep is None:
                 raise ValueError("timestep required for training mode")
-            return self.forward_train(sequence, timestep, padding_mask)
+            return self.forward_train(sequence, timestep)
         elif mode == "inference":
             if item_seq is None:
                 raise ValueError("item_seq required for inference mode")
-            return self.forward_inference(item_seq, padding_mask)
+            return self.forward_inference(item_seq)
         else:
             raise ValueError(f"Unknown mode: {mode}")

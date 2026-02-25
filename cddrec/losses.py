@@ -183,7 +183,6 @@ def compute_total_loss(
     sequence: torch.Tensor,
     sequence_aug: torch.Tensor,
     negatives: torch.Tensor,
-    padding_mask: torch.Tensor | None = None,
     lambda_contrast: float = 0.1,
     temperature: float = 0.1,
     margin: float = 1.0,
@@ -203,7 +202,6 @@ def compute_total_loss(
         sequence: (batch_size, seq_len) full sequence
         sequence_aug: (batch_size, seq_len) augmented sequence
         negatives: (batch_size, seq_len) negative items for each position
-        padding_mask: (batch_size, seq_len) padding mask
         lambda_contrast: Weight for contrastive losses (λ)
         temperature: Temperature for contrastive losses (τ)
         margin: Margin for cross-divergence loss
@@ -228,8 +226,8 @@ def compute_total_loss(
     # Iterate over all diffusion timesteps
     for t in range(model.num_diffusion_steps):
         # Forward pass at timestep t
-        x_0_pred, x_t, input_mask, target_mask = model.forward_train(sequence, t, padding_mask)
-        x_0_pred_aug, _, _, _ = model.forward_train(sequence_aug, t, padding_mask)
+        x_0_pred, x_t, input_mask, target_mask = model.forward_train(sequence, t)
+        x_0_pred_aug, _, _, _ = model.forward_train(sequence_aug, t)
 
         # Compute losses at this timestep
         l_cd = cross_divergence_loss(x_0_pred, x_0_target, x_neg, target_mask, margin)
