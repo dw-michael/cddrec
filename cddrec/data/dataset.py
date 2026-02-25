@@ -93,14 +93,25 @@ class SeqRecDataset(Dataset):
 
         return sequence[start:end]
 
-    def _pad_sequence(self, seq: ItemSequence) -> ItemSequence:
-        """Pad or truncate sequence to max_seq_len"""
+    def _normalize_sequence_length(self, seq: ItemSequence) -> ItemSequence:
+        """
+        Normalize sequence to exactly max_seq_len items.
+
+        - If too long: truncate to keep most recent items
+        - If too short: pad at the end with pad_token
+
+        Returns:
+            Sequence of exactly max_seq_len items
+        """
         if len(seq) > self.max_seq_len:
-            # Keep most recent items
+            # Keep most recent items (truncate from beginning)
             return seq[-self.max_seq_len:]
-        else:
+        elif len(seq) < self.max_seq_len:
             # Pad at the end (back-padding)
             return seq + [self.pad_token] * (self.max_seq_len - len(seq))
+        else:
+            # Already correct length
+            return seq
 
     def _sample_negatives(self, user_items: ItemSequence) -> ItemSequence:
         """
@@ -146,16 +157,18 @@ class SeqRecDataset(Dataset):
         else:
             seq = full_seq
 
-        seq_len = len(seq)
+        # Normalize to exactly max_seq_len (truncate if too long, pad if too short)
+        normalized_seq = self._normalize_sequence_length(seq)
 
-        # Pad sequence
-        padded_seq = self._pad_sequence(seq)
+        # IMPORTANT: Record actual length (clamped to max_seq_len)
+        # This ensures seq_len never exceeds the actual tensor size
+        seq_len = min(len(seq), self.max_seq_len)
 
         # Sample negatives for all positions (use full history for negative sampling)
         negatives = self._sample_negatives(full_seq)
 
         sample = {
-            "sequence": torch.tensor(padded_seq, dtype=torch.long),
+            "sequence": torch.tensor(normalized_seq, dtype=torch.long),
             "negatives": torch.tensor(negatives, dtype=torch.long),
             "seq_len": torch.tensor(seq_len, dtype=torch.long),
         }
