@@ -11,7 +11,7 @@ import argparse
 import json
 
 from cddrec.models import CDDRec
-from cddrec.data import setup_data_from_file
+from cddrec.data import load_data
 from cddrec.training import train, load_checkpoint
 from cddrec.utils import set_seed, count_parameters
 
@@ -25,6 +25,8 @@ def parse_args():
                         help="Path to processed data file (.json)")
     parser.add_argument("--num_workers", type=int, default=0,
                         help="Number of dataloader workers")
+    parser.add_argument("--min_subseq_len", type=int, default=2,
+                        help="Minimum subsequence length for training (default: 2, must be >= 2)")
 
     # Model arguments
     parser.add_argument("--embedding_dim", type=int, default=128,
@@ -104,11 +106,12 @@ def main():
 
     # Load data and create dataloaders
     print("Loading data and creating dataloaders...")
-    data = setup_data_from_file(
+    data = load_data(
         json_path=args.data_path,
         batch_size=args.batch_size,
         max_seq_len=args.max_seq_len,
         num_workers=args.num_workers,
+        min_subseq_len=args.min_subseq_len,
     )
 
     print(f"Users: {data.num_users}, Items: {data.num_items}")

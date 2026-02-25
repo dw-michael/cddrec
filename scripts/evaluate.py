@@ -11,7 +11,7 @@ import argparse
 import json
 
 from cddrec.models import CDDRec
-from cddrec.data import setup_data_from_file
+from cddrec.data import load_data
 from cddrec.training import load_checkpoint, validate
 from cddrec.utils import set_seed
 
@@ -66,7 +66,7 @@ def main():
 
     # Load data and create dataloaders
     print("Loading data...")
-    data = setup_data_from_file(
+    data = load_data(
         json_path=args.data_path,
         batch_size=args.batch_size,
         max_seq_len=args.max_seq_len,

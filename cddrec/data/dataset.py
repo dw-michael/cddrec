@@ -26,6 +26,7 @@ class SeqRecDataset(Dataset):
         pad_token: int = 0,
         train_mode: bool = True,
         seed: int | None = None,
+        min_subseq_len: int = 2,
     ):
         """
         Args:
@@ -37,11 +38,22 @@ class SeqRecDataset(Dataset):
                        If False, use full sequences (for val/test).
             seed: Random seed for subsequence sampling (for reproducibility).
                  If None, uses default random state.
+            min_subseq_len: Minimum length for sampled subsequences (default: 2).
+                           Must be >= 2 (need at least 1 context + 1 target).
+                           Higher values may filter out noisy short sequences.
         """
+        # Validate minimum subsequence length
+        if min_subseq_len < 2:
+            raise ValueError(
+                f"min_subseq_len must be >= 2 (need at least 1 context + 1 target), "
+                f"got {min_subseq_len}"
+            )
+
         self.num_items = num_items
         self.max_seq_len = max_seq_len
         self.pad_token = pad_token
         self.train_mode = train_mode
+        self.min_subseq_len = min_subseq_len
 
         # Sequences are already complete (no concatenation needed)
         self.full_sequences = sequences
@@ -57,18 +69,16 @@ class SeqRecDataset(Dataset):
         Sample a random contiguous subsequence uniformly over all valid subsequences.
 
         Samples start and end positions such that each possible contiguous
-        subsequence of length >= 2 has equal probability.
-
-        Min length = 2 (need at least 1 context item + 1 target item).
+        subsequence of length >= min_subseq_len has equal probability.
 
         Args:
             sequence: Full sequence to sample from
 
         Returns:
-            Sampled contiguous subsequence of length >= 2
+            Sampled contiguous subsequence of length >= min_subseq_len
         """
         seq_len = len(sequence)
-        min_len = 2
+        min_len = self.min_subseq_len
 
         if seq_len <= min_len:
             return sequence
@@ -254,6 +264,7 @@ def load_data(
     batch_size: int = 128,
     max_seq_len: int = 20,
     num_workers: int = 0,
+    min_subseq_len: int = 2,
 ) -> DataBundle:
     """
     Load preprocessed data and create everything needed for training.
@@ -269,6 +280,9 @@ def load_data(
         batch_size: Batch size for dataloaders
         max_seq_len: Maximum sequence length (pad/truncate)
         num_workers: Number of worker processes for dataloaders
+        min_subseq_len: Minimum length for training subsequences (default: 2).
+                       Must be >= 2. Higher values filter out short sequences.
+                       Only affects training; val/test always use full sequences.
 
     Returns:
         DataBundle with all datasets, dataloaders, and metadata
@@ -294,6 +308,7 @@ def load_data(
         max_seq_len=max_seq_len,
         train_mode=True,   # Enable random subsequence sampling
         seed=None,         # Random sampling each time
+        min_subseq_len=min_subseq_len,
     )
 
     val_dataset = SeqRecDataset(
@@ -302,6 +317,7 @@ def load_data(
         max_seq_len=max_seq_len,
         train_mode=False,  # Use full sequences (deterministic)
         seed=42,           # Seed not used in eval mode, but set for consistency
+        min_subseq_len=min_subseq_len,  # Not used in eval mode but kept for consistency
     )
 
     test_dataset = SeqRecDataset(
@@ -310,6 +326,7 @@ def load_data(
         max_seq_len=max_seq_len,
         train_mode=False,  # Use full sequences (deterministic)
         seed=42,           # Seed not used in eval mode, but set for consistency
+        min_subseq_len=min_subseq_len,  # Not used in eval mode but kept for consistency
     )
 
     # Create dataloaders
