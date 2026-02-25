@@ -49,10 +49,11 @@ class StepWiseDiffuser(nn.Module):
         else:
             raise ValueError(f"Unknown schedule: {schedule_type}")
 
-        # Extract noise schedule parameters
-        self.betas = self.scheduler.betas
-        self.alphas = self.scheduler.alphas
-        self.alphas_cumprod = self.scheduler.alphas_cumprod
+        # Extract noise schedule parameters and register as buffers
+        # Buffers are non-trainable tensors that move with the model (CPU/GPU)
+        self.register_buffer("betas", self.scheduler.betas)
+        self.register_buffer("alphas", self.scheduler.alphas)
+        self.register_buffer("alphas_cumprod", self.scheduler.alphas_cumprod)
 
     def add_noise(
         self,
