@@ -53,7 +53,10 @@ def parse_args():
 
     # Training arguments
     parser.add_argument("--batch_size", type=int, default=128,
-                        help="Batch size")
+                        help="Batch size for training")
+    parser.add_argument("--val_batch_size", type=int, default=None,
+                        help="Batch size for validation/test (default: same as batch_size). "
+                             "Can be larger since no gradients needed (e.g., 2-4x training batch size)")
     parser.add_argument("--lr", type=float, default=0.001,
                         help="Learning rate")
     parser.add_argument("--num_epochs", type=int, default=100,
@@ -109,6 +112,7 @@ def main():
     data = load_data(
         json_path=args.data_path,
         batch_size=args.batch_size,
+        val_batch_size=args.val_batch_size,
         max_seq_len=args.max_seq_len,
         num_workers=args.num_workers,
         min_subseq_len=args.min_subseq_len,
@@ -149,7 +153,7 @@ def main():
 
     # Train model
     print("\nStarting training...")
-    history = train(
+    history, experiment_id = train(
         model=model,
         data=data,
         optimizer=optimizer,
@@ -165,12 +169,16 @@ def main():
         verbose=verbose,
     )
 
-    # Save training history
-    history_path = Path(args.checkpoint_dir) / "training_history.json"
+    # Save training history with experiment ID
+    history_path = Path(args.checkpoint_dir) / f"{experiment_id}_history.json"
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
 
-    print(f"\nTraining history saved to {history_path}")
+    print(f"\nTraining history saved: {history_path}")
+    print(f"Experiment files:")
+    print(f"  - Config: {args.checkpoint_dir}/{experiment_id}_config.json")
+    print(f"  - History: {args.checkpoint_dir}/{experiment_id}_history.json")
+    print(f"  - Checkpoint: {args.checkpoint_dir}/{experiment_id}_best.pth")
 
 
 if __name__ == "__main__":

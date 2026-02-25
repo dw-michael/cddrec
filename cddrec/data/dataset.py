@@ -277,6 +277,7 @@ class DataBundle(NamedTuple):
 def load_data(
     json_path: str,
     batch_size: int = 128,
+    val_batch_size: int | None = None,
     max_seq_len: int = 20,
     num_workers: int = 0,
     min_subseq_len: int = 2,
@@ -292,7 +293,10 @@ def load_data(
 
     Args:
         json_path: Path to preprocessed JSON file (from preprocess_interactions)
-        batch_size: Batch size for dataloaders
+        batch_size: Batch size for training dataloader
+        val_batch_size: Batch size for validation/test dataloaders (default: same as batch_size).
+                       Can be larger than training batch size since validation doesn't compute
+                       gradients or store optimizer states. Typically 2-4x larger is safe.
         max_seq_len: Maximum sequence length (pad/truncate)
         num_workers: Number of worker processes for dataloaders
         min_subseq_len: Minimum length for training subsequences (default: 2).
@@ -304,12 +308,18 @@ def load_data(
 
     Example:
         >>> from cddrec.data import load_data
-        >>> data = load_data("data/processed/beauty.json", batch_size=256)
+        >>> # Use larger batch size for validation (no gradients needed)
+        >>> data = load_data("data/processed/beauty.json",
+        ...                  batch_size=128,
+        ...                  val_batch_size=512)
         >>> print(f"Training on {data.num_items} items")
         >>> model = CDDRec(num_items=data.num_items, ...)
         >>> for batch in data.train_loader:
         ...     # train model
     """
+    # Default to same batch size for validation if not specified
+    if val_batch_size is None:
+        val_batch_size = batch_size
     # Import here to avoid circular dependency
     from .preprocessing import load_processed_data
 
@@ -354,14 +364,14 @@ def load_data(
 
     val_loader = create_dataloader(
         val_dataset,
-        batch_size=batch_size,
+        batch_size=val_batch_size,
         shuffle=False,
         num_workers=num_workers,
     )
 
     test_loader = create_dataloader(
         test_dataset,
-        batch_size=batch_size,
+        batch_size=val_batch_size,
         shuffle=False,
         num_workers=num_workers,
     )
