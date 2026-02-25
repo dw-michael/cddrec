@@ -30,7 +30,8 @@ def preprocess_interactions(
             - timestamp: any sortable value
             Can be list, generator, database cursor, etc.
         min_user_interactions: Minimum interactions per user (hard constraint, default: 5)
-            Note: Need ≥4 for train/val/test split (2 train + 1 val + 1 test minimum)
+            Note: Need ≥4 for train/val/test split (2 for training + 1 val + 1 test)
+            Training sequences need ≥2 items (minimum 1 context + 1 target)
         min_item_interactions: Minimum interactions per item (soft constraint, default: 5)
         max_items: If set, keep only top-K most popular items
         output_path: If provided, saves data to JSON and mappings to separate file
@@ -286,12 +287,18 @@ def _train_val_test_split(
     user_sequences: dict[int, list[int]]
 ) -> tuple[list[list[int]], list[int], list[list[int]], list[int], list[list[int]], list[int]]:
     """
-    Split sequences into train/val/test.
+    Split sequences into train/val/test (one sample per user per split).
+
+    Subsequences are sampled dynamically during training (in Dataset), not materialized here.
+    This saves memory and enables uniform sampling over all possible subsequences.
 
     For each user with sequence [1, 2, 3, 4, 5]:
-    - Test: [1, 2, 3, 4, 5] (predict 5 from [1,2,3,4])
-    - Val:  [1, 2, 3, 4] (predict 4 from [1,2,3])
-    - Train: [1, 2], [1, 2, 3] (multiple samples with increasing history)
+    - Train: [1, 2, 3] (full sequence minus last 2 for val/test)
+    - Val:   [1, 2, 3, 4] (full sequence minus last 1)
+    - Test:  [1, 2, 3, 4, 5] (full sequence)
+
+    During training, random contiguous subsequences of length >= 2 will be sampled
+    from the training sequence (e.g., [1,2], [2,3], [1,2,3], etc.)
 
     Returns:
         (train_sequences, train_user_ids,
@@ -306,25 +313,23 @@ def _train_val_test_split(
     test_user_ids = []
 
     for user_id, sequence in user_sequences.items():
-        if len(sequence) < 3:
-            # Need at least 3 items for train/val/test split
+        if len(sequence) < 4:
+            # Need at least 4 items: 2 for training + 1 for val + 1 for test
+            # Training needs >= 2 items (1 context + 1 target minimum)
             continue
 
-        # Test: full sequence up to last item (predict last)
+        # One sample per user per split
+        # Test: full sequence (predict last item from [1,2,3,4])
         test_sequences.append(sequence)
         test_user_ids.append(user_id)
 
-        # Validation: full sequence up to second-to-last (predict second-to-last)
+        # Validation: full sequence minus last item (predict second-to-last from [1,2,3])
         val_sequences.append(sequence[:-1])
         val_user_ids.append(user_id)
 
-        # Training: multiple samples with increasing history
-        # For sequence [1,2,3,4,5], create:
-        #   [1, 2] (predict 2 from 1)
-        #   [1, 2, 3] (predict 3 from 1,2)
-        for i in range(1, len(sequence) - 2):
-            train_sequences.append(sequence[:i+1])  # Include target in sequence
-            train_user_ids.append(user_id)
+        # Training: full sequence minus last 2 items (dynamic subsequence sampling in Dataset)
+        train_sequences.append(sequence[:-2])
+        train_user_ids.append(user_id)
 
     return (
         train_sequences, train_user_ids,

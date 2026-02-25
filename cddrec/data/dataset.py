@@ -13,6 +13,9 @@ class SeqRecDataset(Dataset):
     Each sample contains:
     - Full interaction sequence (input and target will be sliced in model)
     - Negative items for each position (for cross-divergence loss)
+
+    In training mode, randomly samples contiguous subsequences of length >= 2
+    to provide diverse training samples and avoid bias toward longer sequences.
     """
 
     def __init__(
@@ -21,6 +24,8 @@ class SeqRecDataset(Dataset):
         num_items: int,
         max_seq_len: int = 20,
         pad_token: int = 0,
+        train_mode: bool = True,
+        seed: int | None = None,
     ):
         """
         Args:
@@ -28,16 +33,53 @@ class SeqRecDataset(Dataset):
             num_items: Total number of items (for negative sampling)
             max_seq_len: Maximum sequence length (pad/truncate to this)
             pad_token: Padding token ID
+            train_mode: If True, randomly sample subsequences during training.
+                       If False, use full sequences (for val/test).
+            seed: Random seed for subsequence sampling (for reproducibility).
+                 If None, uses default random state.
         """
         self.num_items = num_items
         self.max_seq_len = max_seq_len
         self.pad_token = pad_token
+        self.train_mode = train_mode
 
         # Sequences are already complete (no concatenation needed)
         self.full_sequences = sequences
 
+        # Per-dataset RNG for reproducible subsequence sampling
+        self.rng = random.Random(seed) if seed is not None else random.Random()
+
     def __len__(self) -> int:
         return len(self.full_sequences)
+
+    def _sample_subsequence(self, sequence: list[int]) -> list[int]:
+        """
+        Sample a random contiguous subsequence uniformly over all valid subsequences.
+
+        Samples start and end positions such that each possible contiguous
+        subsequence of length >= 2 has equal probability.
+
+        Min length = 2 (need at least 1 context item + 1 target item).
+
+        Args:
+            sequence: Full sequence to sample from
+
+        Returns:
+            Sampled contiguous subsequence of length >= 2
+        """
+        seq_len = len(sequence)
+        min_len = 2
+
+        if seq_len <= min_len:
+            return sequence
+
+        # Sample start position: [0, seq_len - min_len]
+        start = self.rng.randint(0, seq_len - min_len)
+
+        # Sample end position: [start + min_len, seq_len]
+        end = self.rng.randint(start + min_len, seq_len)
+
+        return sequence[start:end]
 
     def _pad_sequence(self, seq: list[int]) -> list[int]:
         """Pad or truncate sequence to max_seq_len"""
@@ -75,19 +117,29 @@ class SeqRecDataset(Dataset):
         """
         Get a single sample.
 
+        In training mode, samples a random contiguous subsequence.
+        In val/test mode, uses the full sequence.
+
         Returns:
             Dictionary with:
-            - sequence: (max_seq_len,) padded full sequence
+            - sequence: (max_seq_len,) padded sequence
             - negatives: (max_seq_len,) negative items for each position
             - seq_len: Scalar, length of sequence before padding
         """
         full_seq = self.full_sequences[idx]
-        seq_len = len(full_seq)
+
+        # Sample subsequence during training, use full sequence for val/test
+        if self.train_mode:
+            seq = self._sample_subsequence(full_seq)
+        else:
+            seq = full_seq
+
+        seq_len = len(seq)
 
         # Pad sequence
-        padded_seq = self._pad_sequence(full_seq)
+        padded_seq = self._pad_sequence(seq)
 
-        # Sample negatives for all positions
+        # Sample negatives for all positions (use full history for negative sampling)
         negatives = self._sample_negatives(full_seq)
 
         sample = {
@@ -180,7 +232,7 @@ def create_dataloader(
 class DataBundle(NamedTuple):
     """Container for datasets, dataloaders, and metadata.
 
-    This is returned by setup_data_from_file() for convenience.
+    This is returned by load_data() for convenience.
     """
     # Datasets
     train_dataset: SeqRecDataset
@@ -197,23 +249,23 @@ class DataBundle(NamedTuple):
     num_items: int
 
 
-def setup_data_from_file(
+def load_data(
     json_path: str,
     batch_size: int = 128,
     max_seq_len: int = 20,
     num_workers: int = 0,
 ) -> DataBundle:
     """
-    One-stop convenience function: load JSON data and create everything needed for training.
+    Load preprocessed data and create everything needed for training.
 
-    This function:
+    This is the main entry point for loading data - it handles everything:
     1. Loads processed data from JSON
     2. Creates train/val/test datasets
     3. Creates train/val/test dataloaders
     4. Returns everything in a convenient bundle
 
     Args:
-        json_path: Path to preprocessed JSON file (from save_processed_data)
+        json_path: Path to preprocessed JSON file (from preprocess_interactions)
         batch_size: Batch size for dataloaders
         max_seq_len: Maximum sequence length (pad/truncate)
         num_workers: Number of worker processes for dataloaders
@@ -222,8 +274,8 @@ def setup_data_from_file(
         DataBundle with all datasets, dataloaders, and metadata
 
     Example:
-        >>> from cddrec.data import setup_data_from_file
-        >>> data = setup_data_from_file("data/processed/beauty.json", batch_size=256)
+        >>> from cddrec.data import load_data
+        >>> data = load_data("data/processed/beauty.json", batch_size=256)
         >>> print(f"Training on {data.num_items} items")
         >>> model = CDDRec(num_items=data.num_items, ...)
         >>> for batch in data.train_loader:
@@ -240,18 +292,24 @@ def setup_data_from_file(
         sequences=processed_data["train"]["sequences"],
         num_items=processed_data["num_items"],
         max_seq_len=max_seq_len,
+        train_mode=True,   # Enable random subsequence sampling
+        seed=None,         # Random sampling each time
     )
 
     val_dataset = SeqRecDataset(
         sequences=processed_data["val"]["sequences"],
         num_items=processed_data["num_items"],
         max_seq_len=max_seq_len,
+        train_mode=False,  # Use full sequences (deterministic)
+        seed=42,           # Seed not used in eval mode, but set for consistency
     )
 
     test_dataset = SeqRecDataset(
         sequences=processed_data["test"]["sequences"],
         num_items=processed_data["num_items"],
         max_seq_len=max_seq_len,
+        train_mode=False,  # Use full sequences (deterministic)
+        seed=42,           # Seed not used in eval mode, but set for consistency
     )
 
     # Create dataloaders

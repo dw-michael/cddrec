@@ -6,7 +6,7 @@ from .dataset import (
     collate_fn,
     extract_targets,
     DataBundle,
-    setup_data_from_file,
+    load_data,
 )
 from .augmentation import mask_sequence, shuffle_sequence, crop_sequence, augment_sequence
 from .preprocessing import (
@@ -24,7 +24,7 @@ __all__ = [
     "collate_fn",
     "extract_targets",
     "DataBundle",
-    "setup_data_from_file",
+    "load_data",
     # Augmentation
     "mask_sequence",
     "shuffle_sequence",
