@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 import time
 import json
 from pathlib import Path
+from tqdm.auto import tqdm
 
 from cddrec import models
 from .losses import compute_total_loss
@@ -23,6 +24,8 @@ def train_epoch(
     margin: float = 1.0,
     augmentation_type: str = "random",
     augmentation_ratio: float = 0.2,
+    verbose: bool = True,
+    epoch: int | None = None,
 ) -> dict[str, float]:
     """
     Train for one epoch.
@@ -37,6 +40,8 @@ def train_epoch(
         margin: Margin for cross-divergence loss
         augmentation_type: Type of augmentation
         augmentation_ratio: Augmentation intensity
+        verbose: Whether to show progress bar
+        epoch: Current epoch number (for progress bar description)
 
     Returns:
         Dictionary with average losses
@@ -49,7 +54,11 @@ def train_epoch(
     total_cross_loss = 0.0
     num_batches = 0
 
-    for batch in train_loader:
+    # Create progress bar
+    pbar = tqdm(train_loader, desc=f"Epoch {epoch}" if epoch is not None else "Training",
+                disable=not verbose, leave=False)
+
+    for batch in pbar:
         # Move to device
         sequence = batch["sequence"].to(device)
         negatives = batch["negatives"].to(device)
@@ -84,6 +93,13 @@ def train_epoch(
         total_cross_loss += loss_dict["cross_view_contrastive"]
         num_batches += 1
 
+        # Update progress bar with current loss
+        if verbose:
+            pbar.set_postfix({
+                "loss": f"{loss_dict['total_loss']:.4f}",
+                "cd": f"{loss_dict['cross_divergence']:.4f}",
+            })
+
     # Average losses
     avg_losses = {
         "train_loss": total_loss / num_batches,
@@ -101,6 +117,7 @@ def validate(
     val_loader: DataLoader,
     device: torch.device,
     ks: list = [1, 5, 10],
+    verbose: bool = True,
 ) -> dict[str, float]:
     """
     Validate model on validation set.
@@ -110,6 +127,7 @@ def validate(
         val_loader: Validation data loader
         device: Device
         ks: K values for Recall@K and NDCG@K
+        verbose: Whether to show progress bar
 
     Returns:
         Dictionary with validation metrics
@@ -120,7 +138,10 @@ def validate(
     all_ndcg = {k: [] for k in ks}
     all_mrr = []
 
-    for batch in val_loader:
+    # Create progress bar
+    pbar = tqdm(val_loader, desc="Validating", disable=not verbose, leave=False)
+
+    for batch in pbar:
         # Move to device
         sequence = batch["sequence"].to(device)
         seq_len = batch["seq_len"].to(device)
@@ -174,6 +195,7 @@ def train(
     augmentation_type: str = "random",
     augmentation_ratio: float = 0.2,
     val_metric: str = "val_recall@10",
+    verbose: bool = True,
 ) -> dict[str, list]:
     """
     Main training loop with early stopping and checkpointing.
@@ -193,6 +215,7 @@ def train(
         augmentation_type: Augmentation type
         augmentation_ratio: Augmentation ratio
         val_metric: Metric to use for early stopping
+        verbose: Whether to show progress bars and detailed output
 
     Returns:
         Dictionary with training history
@@ -229,10 +252,12 @@ def train(
             margin=margin,
             augmentation_type=augmentation_type,
             augmentation_ratio=augmentation_ratio,
+            verbose=verbose,
+            epoch=epoch + 1,
         )
 
         # Validate
-        val_metrics = validate(model, val_loader, device)
+        val_metrics = validate(model, val_loader, device, verbose=verbose)
 
         # Record history
         history["train_loss"].append(train_losses["train_loss"])

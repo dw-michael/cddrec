@@ -84,6 +84,10 @@ def parse_args():
                         help="Directory to save checkpoints")
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to checkpoint to resume from")
+    parser.add_argument("--verbose", action="store_true", default=True,
+                        help="Show progress bars and detailed training output")
+    parser.add_argument("--quiet", action="store_true",
+                        help="Disable progress bars (sets verbose=False)")
 
     return parser.parse_args()
 
@@ -137,6 +141,9 @@ def main():
         print(f"\nResuming from checkpoint: {args.resume}")
         start_epoch, _ = load_checkpoint(model, args.resume, optimizer, device)
 
+    # Determine verbosity
+    verbose = args.verbose and not args.quiet
+
     # Train model
     print("\nStarting training...")
     history = train(
@@ -153,6 +160,7 @@ def main():
         margin=args.margin,
         augmentation_type=args.augmentation,
         augmentation_ratio=args.augmentation_ratio,
+        verbose=verbose,
     )
 
     # Save training history
