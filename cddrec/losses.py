@@ -97,9 +97,15 @@ def in_view_contrastive_loss(
     x_0_pred_flat = x_0_pred.view(batch_size * seq_len, embedding_dim)
     x_t_flat = x_t.view(batch_size * seq_len, embedding_dim)
 
-    # Normalize embeddings
-    x_0_pred_flat = F.normalize(x_0_pred_flat, dim=1)
-    x_t_flat = F.normalize(x_t_flat, dim=1)
+    # Apply mask before normalization to avoid NaN from padding positions
+    if mask is not None:
+        mask_flat = mask.reshape(-1, 1).float()  # (batch_size * seq_len, 1)
+        x_0_pred_flat = x_0_pred_flat * mask_flat
+        x_t_flat = x_t_flat * mask_flat
+
+    # Normalize embeddings (eps prevents division by zero for safety)
+    x_0_pred_flat = F.normalize(x_0_pred_flat, dim=1, eps=1e-8)
+    x_t_flat = F.normalize(x_t_flat, dim=1, eps=1e-8)
 
     # Compute similarity matrix: (batch_size * seq_len, batch_size * seq_len)
     logits = torch.matmul(x_0_pred_flat, x_t_flat.T) / temperature
@@ -156,9 +162,15 @@ def cross_view_contrastive_loss(
     x_0_pred_flat = x_0_pred.view(batch_size * seq_len, embedding_dim)
     x_0_pred_aug_flat = x_0_pred_aug.view(batch_size * seq_len, embedding_dim)
 
-    # Normalize embeddings
-    x_0_pred_flat = F.normalize(x_0_pred_flat, dim=1)
-    x_0_pred_aug_flat = F.normalize(x_0_pred_aug_flat, dim=1)
+    # Apply mask before normalization to avoid NaN from padding positions
+    if mask is not None:
+        mask_flat = mask.reshape(-1, 1).float()  # (batch_size * seq_len, 1)
+        x_0_pred_flat = x_0_pred_flat * mask_flat
+        x_0_pred_aug_flat = x_0_pred_aug_flat * mask_flat
+
+    # Normalize embeddings (eps prevents division by zero for safety)
+    x_0_pred_flat = F.normalize(x_0_pred_flat, dim=1, eps=1e-8)
+    x_0_pred_aug_flat = F.normalize(x_0_pred_aug_flat, dim=1, eps=1e-8)
 
     # Compute similarity matrix
     logits = torch.matmul(x_0_pred_flat, x_0_pred_aug_flat.T) / temperature
