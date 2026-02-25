@@ -48,6 +48,21 @@ class CDDRec(nn.Module):
         """
         super().__init__()
 
+        # Store hyperparameters for serialization/logging
+        self.config = {
+            'num_items': num_items,
+            'embedding_dim': embedding_dim,
+            'encoder_layers': encoder_layers,
+            'decoder_layers': decoder_layers,
+            'num_heads': num_heads,
+            'dropout': dropout,
+            'max_seq_len': max_seq_len,
+            'num_diffusion_steps': num_diffusion_steps,
+            'noise_schedule': noise_schedule,
+            'max_beta': max_beta,
+            'padding_idx': padding_idx,
+        }
+
         self.num_items = num_items
         self.embedding_dim = embedding_dim
         self.num_diffusion_steps = num_diffusion_steps
@@ -219,3 +234,35 @@ class CDDRec(nn.Module):
             return self.forward_inference(item_seq)
         else:
             raise ValueError(f"Unknown mode: {mode}")
+
+    def to_config(self) -> dict:
+        """
+        Export model hyperparameters for serialization/logging.
+
+        Returns:
+            Dictionary containing all model hyperparameters
+        """
+        return self.config.copy()
+
+    @classmethod
+    def from_config(cls, config: dict) -> "CDDRec":
+        """
+        Reconstruct model from saved configuration.
+
+        Args:
+            config: Dictionary containing model hyperparameters
+
+        Returns:
+            CDDRec model instance with specified configuration
+
+        Example:
+            >>> config = model.to_config()
+            >>> # Save config to JSON
+            >>> with open("model_config.json", "w") as f:
+            ...     json.dump(config, f)
+            >>> # Later, reload
+            >>> with open("model_config.json", "r") as f:
+            ...     config = json.load(f)
+            >>> model = CDDRec.from_config(config)
+        """
+        return cls(**config)

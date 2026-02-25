@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 import time
 import json
 from pathlib import Path
+from datetime import datetime
 from tqdm.auto import tqdm
 
 from cddrec import models, data
@@ -200,7 +201,7 @@ def train(
     augmentation_ratio: float = 0.2,
     val_metric: str = "val_recall@10",
     verbose: bool = True,
-) -> dict[str, list]:
+) -> tuple[dict[str, list], str]:
     """
     Main training loop with early stopping and checkpointing.
 
@@ -221,14 +222,56 @@ def train(
         verbose: Whether to show progress bars and detailed output
 
     Returns:
-        Dictionary with training history (train_loss, val_metrics)
+        Tuple of (history, experiment_id) where:
+        - history: Dictionary with training history (train_loss, val_metrics)
+        - experiment_id: Timestamped experiment identifier
     """
     # Extract loaders from DataBundle
     train_loader = data.train_loader
     val_loader = data.val_loader
+
     # Create checkpoint directory
     checkpoint_path = Path(checkpoint_dir)
     checkpoint_path.mkdir(parents=True, exist_ok=True)
+
+    # Generate experiment ID with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    experiment_id = f"cddrec_{timestamp}"
+
+    # Build experiment configuration for logging
+    experiment_config = {
+        'experiment_id': experiment_id,
+        'timestamp': datetime.now().isoformat(),
+        'model': model.to_config(),
+        'data': {
+            'num_users': data.num_users,
+            'num_items': data.num_items,
+            'train_samples': len(data.train_dataset),
+            'val_samples': len(data.val_dataset),
+            'test_samples': len(data.test_dataset),
+        },
+        'training': {
+            'num_epochs': num_epochs,
+            'early_stopping_patience': early_stopping_patience,
+            'lambda_contrast': lambda_contrast,
+            'temperature': temperature,
+            'margin': margin,
+            'augmentation_type': augmentation_type,
+            'augmentation_ratio': augmentation_ratio,
+            'val_metric': val_metric,
+        },
+        'optimizer': {
+            'type': type(optimizer).__name__,
+            'lr': optimizer.param_groups[0]['lr'],
+        },
+        'device': str(device),
+    }
+
+    # Save experiment config
+    config_file = checkpoint_path / f"{experiment_id}_config.json"
+    with open(config_file, 'w') as f:
+        json.dump(experiment_config, f, indent=2)
+    print(f"Experiment config saved: {config_file}")
 
     # Training history
     history = {
@@ -241,7 +284,8 @@ def train(
     patience_counter = 0
     best_epoch = 0
 
-    print(f"Starting training for {num_epochs} epochs...")
+    print(f"\nStarting training for {num_epochs} epochs...")
+    print(f"Experiment ID: {experiment_id}")
     print(f"Device: {device}")
 
     for epoch in range(num_epochs):
@@ -286,16 +330,18 @@ def train(
             patience_counter = 0
             best_epoch = epoch + 1
 
-            # Save best model
-            checkpoint_file = checkpoint_path / "best_model.pth"
+            # Save best model with timestamped name
+            checkpoint_file = checkpoint_path / f"{experiment_id}_best.pth"
             torch.save({
                 "epoch": epoch + 1,
+                "experiment_id": experiment_id,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_metrics": val_metrics,
+                "model_config": model.to_config(),
             }, checkpoint_file)
 
-            print(f"  → Best model saved (epoch {best_epoch})")
+            print(f"  → Best model saved: {checkpoint_file.name} (epoch {best_epoch})")
 
         else:
             patience_counter += 1
@@ -310,7 +356,8 @@ def train(
                 print(f"  No improvement (early stopping disabled)")
 
     print("\nTraining completed!")
-    return history
+    print(f"Experiment ID: {experiment_id}")
+    return history, experiment_id
 
 
 def load_checkpoint(
