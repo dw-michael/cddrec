@@ -15,15 +15,7 @@ pip install -r requirements.txt
 
 ## Quick Start
 
-### 1. Run Smoke Tests
-
-Verify the implementation works:
-
-```bash
-python tests/test_basic.py
-```
-
-### 2. Prepare Data
+### 1. Prepare Data
 
 Process your raw interaction data using the preprocessing API:
 
@@ -55,12 +47,13 @@ result = preprocess_interactions(stream_from_db(), output_path="data/processed/m
 ```
 
 The API automatically:
+
 - Converts IDs to model format (0-indexed users, 1-indexed items)
 - Filters users/items by interaction count
 - Splits into train/val/test sets
 - Saves data and ID mappings for later use
 
-### 3. Train Model
+### 2. Train Model
 
 ```bash
 # Use the preprocessed data (num_items is read from the data file)
@@ -73,7 +66,7 @@ python scripts/train.py \
   --num_epochs 100
 ```
 
-### 4. Evaluate Model
+### 3. Evaluate Model
 
 ```bash
 python scripts/evaluate.py \
@@ -81,23 +74,6 @@ python scripts/evaluate.py \
   --checkpoint checkpoints/best_model.pth \
   --split test
 ```
-
-## Sanity Check (Recommended First Step)
-
-Before training on real data, verify the implementation with pattern-based synthetic data:
-
-```bash
-# Automated sanity check (~10-15 minutes on CPU)
-bash scripts/run_sanity_check.sh
-```
-
-This creates synthetic data with verifiable patterns (sequential tracks and item clusters), trains a small model, and verifies the model learned the patterns.
-
-**Success criteria:**
-- Sequential Rank@5: >70% (model predicts next item in sequence)
-- Cluster Top-5: >60% (model predicts items from same cluster)
-
-See `SANITY_CHECK_GUIDE.md` for detailed explanation, troubleshooting, and interpreting results.
 
 ## Project Structure
 
@@ -116,11 +92,9 @@ seqdiff/
 │       ├── dataset.py           # PyTorch Dataset
 │       ├── augmentation.py      # Data augmentation
 │       └── preprocessing.py     # Preprocessing utilities
-├── scripts/
-│   ├── train.py                 # Training script
-│   └── evaluate.py              # Evaluation script
-└── tests/
-    └── test_basic.py            # Smoke tests
+└── scripts/
+    ├── train.py                 # Training script
+    └── evaluate.py              # Evaluation script
 ```
 
 ## Model Architecture
@@ -141,6 +115,7 @@ The model consists of three main components:
 ## Training Configuration
 
 Hyperparameters (from paper):
+
 - Optimizer: Adam
 - Learning rate: 0.001
 - Batch size: 128
@@ -148,5 +123,3 @@ Hyperparameters (from paper):
 - Max sequence length: 20
 - Dropout: 0.2
 - Diffusion steps: 10-30 (dataset-dependent)
-
-See `CLAUDE.md` for detailed implementation notes.
