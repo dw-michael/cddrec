@@ -31,25 +31,25 @@ def parse_args():
     # Model arguments
     parser.add_argument("--embedding_dim", type=int, default=128,
                         help="Embedding dimension")
-    parser.add_argument("--encoder_layers", type=int, default=2,
-                        help="Number of encoder layers")
+    parser.add_argument("--encoder_layers", type=int, default=1,
+                        help="Number of encoder layers (authors use 1)")
     parser.add_argument("--decoder_layers", type=int, default=2,
                         help="Number of decoder layers")
-    parser.add_argument("--num_heads", type=int, default=2,
-                        help="Number of attention heads")
+    parser.add_argument("--num_heads", type=int, default=4,
+                        help="Number of attention heads (authors use 4)")
     parser.add_argument("--dropout", type=float, default=0.2,
-                        help="Dropout probability")
+                        help="Dropout probability (authors use 0.2 for attention, 0.0 for hidden)")
     parser.add_argument("--max_seq_len", type=int, default=20,
                         help="Maximum sequence length")
 
     # Diffusion arguments
-    parser.add_argument("--diffusion_steps", type=int, default=30,
-                        help="Number of diffusion steps")
+    parser.add_argument("--diffusion_steps", type=int, default=20,
+                        help="Number of diffusion steps (authors use T=20)")
     parser.add_argument("--noise_schedule", type=str, default="linear",
                         choices=["linear", "cosine"],
                         help="Noise schedule type")
-    parser.add_argument("--max_beta", type=float, default=0.1,
-                        help="Maximum beta for linear schedule")
+    parser.add_argument("--max_beta", type=float, default=0.002,
+                        help="Maximum beta for linear schedule (authors use beta_T=0.002, NOT 0.1!)")
 
     # Training arguments
     parser.add_argument("--batch_size", type=int, default=128,
@@ -65,10 +65,10 @@ def parse_args():
                         help="Early stopping patience (default: None/disabled for sanity checks)")
 
     # Loss arguments
-    parser.add_argument("--lambda_contrast", type=float, default=0.1,
-                        help="Weight for contrastive losses")
-    parser.add_argument("--temperature", type=float, default=0.1,
-                        help="Temperature for contrastive losses")
+    parser.add_argument("--lambda_contrast", type=float, default=0.3,
+                        help="Weight for contrastive losses (authors use 0.3)")
+    parser.add_argument("--temperature", type=float, default=0.5,
+                        help="Temperature for contrastive losses (authors use 0.5)")
 
     # Augmentation arguments
     parser.add_argument("--augmentation", type=str, default="random",

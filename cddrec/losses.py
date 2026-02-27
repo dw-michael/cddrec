@@ -17,24 +17,24 @@ def cross_divergence_loss(
     Cross-divergence loss: ensures predicted embeddings are close to targets
     and far from negative samples.
 
-    From paper Equation 13 (exact formulation):
-        L_cd^t = (1/N) ∑_n [log σ(-D_KL[q(x_t^n|x_0^n) || p_θ(x̂_t^n|es,t)])
-                          + log(1 - σ(-D_KL[q(x_t'^n|x_0'^n) || p_θ(x̂_t^n|es,t)]))]
+    FIXED: Now uses dot product similarity (matching authors' implementation)
+    instead of squared distances. The authors' implementation in their GitHub repo
+    uses binary cross-entropy on dot products, not squared distances.
+
+    Authors' implementation (models.py:262-274):
+        pos_logits = torch.sum(pos * seq_emb, -1)  # Dot product
+        neg_logits = torch.sum(neg * seq_emb, -1)  # Dot product
+        loss = -log(sigmoid(pos_logits)) - log(1 - sigmoid(neg_logits))
+
+    This simplifies to:
+        L_cd = -(1/N) ∑_n [log(σ(dot(x̂_t, x_t))) + log(1 - σ(dot(x̂_t, x_t')))]
+             = -(1/N) ∑_n [log(σ(dot(x̂_t, x_t))) + log(σ(-dot(x̂_t, x_t')))]
 
     Where:
-        - D_KL is KL divergence between distributions
-        - For Gaussians with same variance: D_KL ∝ ||μ1 - μ2||²
+        - dot(a, b) = sum(a * b) = dot product
         - σ is sigmoid function
-        - Using identity: log(1 - σ(x)) = log(σ(-x))
-        - x_t: noised target at timestep t (from Equation 11)
-        - x_t': noised negative at timestep t
-
-    This becomes:
-        L_cd = -(1/N) ∑_n [log σ(-||x̂_t - x_t||²) + log σ(||x̂_t - x_t'||²)]
-
-    The negative sign converts the paper's formulation (which maximizes)
-    to a minimization objective. This smooth formulation provides better
-    gradients than hard-margin hinge loss and prevents representation collapse.
+        - Maximizes similarity (dot product) with positive targets
+        - Minimizes similarity (dot product) with negative targets
 
     CRITICAL: Both positive and negative targets must be noised at the SAME
     timestep t. The model learns to predict noised embeddings at each diffusion
@@ -51,20 +51,18 @@ def cross_divergence_loss(
     Returns:
         Scalar loss value
     """
-    # Compute KL divergence using squared distance: (batch_size, seq_len)
-    # D_KL ∝ ||x̂_t - x_t||² for Gaussians with same variance
-    kl_pos = torch.sum((x_pred_t - x_t) ** 2, dim=-1)
-    kl_neg = torch.sum((x_pred_t - x_t_neg) ** 2, dim=-1)
+    # Compute dot product similarity: (batch_size, seq_len)
+    # Higher dot product = more similar
+    pos_logits = torch.sum(x_pred_t * x_t, dim=-1)
+    neg_logits = torch.sum(x_pred_t * x_t_neg, dim=-1)
 
-    # Apply paper's formulation: -[log(σ(-D_KL_pos)) + log(σ(D_KL_neg))]
-    # Interpretation:
-    #   - log(σ(-kl_pos)): reward small distance to positive (kl_pos → 0)
-    #   - log(σ(kl_neg)): reward large distance to negative (kl_neg → ∞)
-    loss_pos = F.logsigmoid(-kl_pos)  # log(sigmoid(-kl_pos))
-    loss_neg = F.logsigmoid(kl_neg)    # log(sigmoid(kl_neg))
+    # Binary cross-entropy on similarity scores
+    # Maximize positive similarity, minimize negative similarity
+    # Using log(1 - sigmoid(x)) = log(sigmoid(-x)) for numerical stability
+    loss_pos = -torch.log(torch.sigmoid(pos_logits) + 1e-24)  # Want this high
+    loss_neg = -torch.log(1 - torch.sigmoid(neg_logits) + 1e-24)  # Want this low
 
-    # Negate to convert maximization to minimization
-    loss = -(loss_pos + loss_neg)
+    loss = loss_pos + loss_neg
 
     # Apply mask if provided
     if mask is not None:

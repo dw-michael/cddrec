@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .encoder import SequenceEncoder
 from .decoder import ConditionalDenoisingDecoder
@@ -204,6 +205,12 @@ class CDDRec(nn.Module):
         # x_pred: (batch_size, embedding_dim)
         # item_embeddings: (num_items + 1, embedding_dim)
         all_item_embeddings = self.item_embeddings.weight[1:]  # Skip padding token
+
+        # CRITICAL: Normalize both embeddings before computing scores
+        # This ensures scores depend only on angular similarity, not magnitude
+        # Authors' implementation (trainers.py:266-268) does this!
+        x_pred = F.normalize(x_pred, p=2, dim=-1)
+        all_item_embeddings = F.normalize(all_item_embeddings, p=2, dim=-1)
 
         # Compute dot product: (batch_size, num_items)
         scores = torch.matmul(x_pred, all_item_embeddings.T)
