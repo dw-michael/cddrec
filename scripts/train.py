@@ -69,8 +69,6 @@ def parse_args():
                         help="Weight for contrastive losses")
     parser.add_argument("--temperature", type=float, default=0.1,
                         help="Temperature for contrastive losses")
-    parser.add_argument("--margin", type=float, default=1.0,
-                        help="Margin for cross-divergence loss")
 
     # Augmentation arguments
     parser.add_argument("--augmentation", type=str, default="random",
@@ -78,6 +76,12 @@ def parse_args():
                         help="Augmentation type")
     parser.add_argument("--augmentation_ratio", type=float, default=0.2,
                         help="Augmentation intensity")
+
+    # Training strategy arguments
+    parser.add_argument("--separate_timestep_updates", action="store_true",
+                        help="Do separate gradient updates per timestep instead of summing. "
+                             "This avoids mixing gradients from different timesteps. "
+                             "With T timesteps, does T gradient updates per batch.")
 
     # Validation arguments
     parser.add_argument("--val_sample_ratio", type=float, default=1.0,
@@ -171,12 +175,12 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         lambda_contrast=args.lambda_contrast,
         temperature=args.temperature,
-        margin=args.margin,
         augmentation_type=args.augmentation,
         augmentation_ratio=args.augmentation_ratio,
         val_sample_ratio=args.val_sample_ratio,
         val_sample_seed=args.val_sample_seed,
         verbose=verbose,
+        separate_timestep_updates=args.separate_timestep_updates,
     )
 
     # Save training history with experiment ID

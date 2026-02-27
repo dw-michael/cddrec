@@ -106,13 +106,20 @@ class CDDRec(nn.Module):
         """
         Forward pass for training at a specific diffusion timestep.
 
+        Architecture flow:
+        1. Encoder: input_seq → es (encoded sequence)
+        2. Diffuser (forward): target_embeddings → x_t (noised targets via Eq. 11)
+        3. Decoder: (timestep, es) → μ_θ (predicted mean)
+        4. Diffuser (sampling): μ_θ → x̂_t (sampled prediction via Eq. 10)
+        5. Loss: Compare x̂_t with x_t
+
         Args:
             sequence: (batch_size, seq_len) full sequence (input + target combined)
             timestep: Diffusion timestep (0 to T-1)
 
         Returns:
-            x_0_pred: (batch_size, seq_len-1, embedding_dim) predicted target embeddings
-            x_t: (batch_size, seq_len-1, embedding_dim) noised target embeddings
+            x_pred_sampled: (batch_size, seq_len-1, embedding_dim) sampled predicted embeddings
+            x_t: (batch_size, seq_len-1, embedding_dim) noised target embeddings (for loss)
             input_mask: (batch_size, seq_len-1) True = data, False = padding
             target_mask: (batch_size, seq_len-1) True = data, False = padding
         """
@@ -133,16 +140,21 @@ class CDDRec(nn.Module):
         # 2. Get target embeddings for all positions
         target_embeddings = self.item_embeddings(target_seq)  # (batch_size, seq_len-1, embedding_dim)
 
-        # 3. Apply forward diffusion at this timestep
+        # 3. Apply forward diffusion to create noised targets (Equation 11)
         x_t = self.diffuser.forward_diffusion(target_embeddings, timestep)
 
         # 4. Create timestep tensor for decoder
         timesteps = torch.full((batch_size,), timestep, device=device, dtype=torch.long)
 
-        # 5. Predict x_0 using decoder
-        x_0_pred = self.decoder(x_t, timesteps, encoded_seq, input_mask)
+        # 5. Predict mean using decoder
+        # CRITICAL: Decoder takes ONLY (timestep, encoded_seq), NOT x_t
+        mean = self.decoder(timesteps, encoded_seq, input_mask)
 
-        return x_0_pred, x_t, input_mask, target_mask
+        # 6. Sample from predicted mean (Equation 10)
+        # x̂_t = μ_θ + sqrt(β_t) * ε
+        x_pred_sampled = self.diffuser.sample_prediction(mean, timesteps)
+
+        return x_pred_sampled, x_t, input_mask, target_mask
 
     @torch.no_grad()
     def forward_inference(
@@ -152,37 +164,49 @@ class CDDRec(nn.Module):
         """
         Forward pass for inference (generation).
 
+        Architecture flow:
+        1. Encoder: item_seq → es (encoded sequence)
+        2. Decoder: (t=0, es) → x̂_0 (predicted next item embedding)
+        3. Score: x̂_0 · all_item_embeddings^T → scores
+
+        Direct prediction at timestep t=0 without iterative denoising or random noise.
+        This avoids accumulating bias during step-wise inference while maintaining
+        the benefits of diffusion training as a regularizer.
+
         Args:
             item_seq: (batch_size, seq_len) historical item IDs
 
         Returns:
             scores: (batch_size, num_items) prediction scores for all items
         """
+        batch_size = item_seq.size(0)
+        device = item_seq.device
+
         # Create mask: True = data, False = padding
         padding_mask = item_seq != self.padding_idx
 
         # 1. Encode historical sequence
         encoded_seq = self.encoder(item_seq, padding_mask)
 
-        # 2. Generate next item embedding via reverse diffusion
-        # Generate single prediction for next item
-        x_0_pred = self.diffuser.reverse_diffusion(
-            decoder=self.decoder,
-            encoded_seq=encoded_seq,
-            seq_len=1,
-            embedding_dim=self.embedding_dim,
-        )  # (batch_size, 1, embedding_dim)
+        # 2. Direct prediction at timestep t=0
+        # Create timestep tensor for t=0
+        timestep = torch.zeros(batch_size, device=device, dtype=torch.long)
+
+        # Predict next item embedding directly from encoded sequence
+        # CRITICAL: No random noise needed! Decoder conditions only on (t, es)
+        x_pred = self.decoder(timestep, encoded_seq, padding_mask, target_seq_len=1)
+        # (batch_size, 1, embedding_dim)
 
         # Squeeze to (batch_size, embedding_dim)
-        x_0_pred = x_0_pred.squeeze(1)
+        x_pred = x_pred.squeeze(1)
 
         # 3. Compute scores for all items
-        # x_0_pred: (batch_size, embedding_dim)
+        # x_pred: (batch_size, embedding_dim)
         # item_embeddings: (num_items + 1, embedding_dim)
         all_item_embeddings = self.item_embeddings.weight[1:]  # Skip padding token
 
         # Compute dot product: (batch_size, num_items)
-        scores = torch.matmul(x_0_pred, all_item_embeddings.T)
+        scores = torch.matmul(x_pred, all_item_embeddings.T)
 
         return scores
 

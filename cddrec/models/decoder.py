@@ -2,28 +2,29 @@
 
 import torch
 import torch.nn as nn
-import math
 
 
 class ConditionalDenoisingDecoder(nn.Module):
     """
-    Generates target item embeddings by denoising conditioned on encoded sequences.
+    Generates target item embeddings conditioned ONLY on encoded sequences and timestep.
 
-    From paper Equations 9-10:
+    CRITICAL: This decoder does NOT take noised embeddings (x_t) as input!
+
+    From paper Equation 9 (Section 4.2):
         μ_θ(es, t) = CA(es, e_t) = Softmax((e_t W_Q)(es W_K)^T / √d)(es W_V)
-        x̂_t = μ_θ(es, t) + √β̂_t ε, where ε ~ N(0, I)
 
-    Where:
-        es: encoded sequence from encoder
-        e_t: timestep embedding (sinusoidal + MLP)
-        CA: cross-attention mechanism
-        μ_θ: predicted mean of target embedding
-        β̂_t: noise variance at step t
+    The decoder predicts x̂_t directly from:
+        - es: encoded sequence from encoder
+        - e_t: timestep embedding (learnable embedding table)
 
-    Key mechanism: Direct conditioning on encoder output at every denoising step
-    (not on previous denoising predictions). Cross-attention where:
-    - Query: timestep embedding e_t
+    The noised embeddings x_t from the diffuser are used ONLY as targets for
+    loss computation, NOT as inputs to this decoder.
+
+    Architecture:
+    - Query: timestep embedding e_t (expanded to target sequence length)
     - Key/Value: encoded sequence representations es
+    - Causal masking for autoregressive generation
+    - Output: predicted target embeddings x̂_t
     """
 
     def __init__(
@@ -47,18 +48,14 @@ class ConditionalDenoisingDecoder(nn.Module):
         self.embedding_dim = embedding_dim
         self.num_diffusion_steps = num_diffusion_steps
 
-        # Timestep embedding (sinusoidal + learned projection)
-        self.time_embed = nn.Sequential(
-            SinusoidalPositionEmbedding(embedding_dim),
-            nn.Linear(embedding_dim, embedding_dim),
-            nn.GELU(),
-            nn.Linear(embedding_dim, embedding_dim),
-        )
-
-        # Project noised input to query space
-        self.input_proj = nn.Linear(embedding_dim, embedding_dim)
+        # Timestep embedding: learnable embedding table (as per paper)
+        # "Initially, we acquire a learnable embedding et for the indicator t
+        # from a time lookup embedding table" (paper lines 610-611)
+        # This creates the query for cross-attention
+        self.time_embed = nn.Embedding(num_diffusion_steps, embedding_dim)
 
         # Cross-attention layers
+        # Query: timestep embedding, Key/Value: encoded sequence
         self.cross_attention_layers = nn.ModuleList([
             CrossAttentionLayer(
                 embedding_dim=embedding_dim,
@@ -68,7 +65,7 @@ class ConditionalDenoisingDecoder(nn.Module):
             for _ in range(num_layers)
         ])
 
-        # Output projection to predict x_0 (mean of target embedding)
+        # Output projection to predict target embeddings
         self.output_proj = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim),
             nn.GELU(),
@@ -81,75 +78,44 @@ class ConditionalDenoisingDecoder(nn.Module):
 
     def forward(
         self,
-        x_t: torch.Tensor,
         t: torch.Tensor,
         encoded_seq: torch.Tensor,
         padding_mask: torch.Tensor | None = None,
+        target_seq_len: int | None = None,
     ) -> torch.Tensor:
         """
-        Denoise x_t conditioned on encoded sequence to predict x_0.
+        Predict target embeddings conditioned on encoded sequence and timestep.
 
         Args:
-            x_t: (batch_size, seq_len, embedding_dim) noised embeddings at step t
             t: (batch_size,) timestep indices
             encoded_seq: (batch_size, seq_len, embedding_dim) encoded sequence from encoder
-            padding_mask: (batch_size, seq_len) boolean mask for valid positions
+            padding_mask: (batch_size, seq_len) boolean mask (True = valid, False = padding)
+            target_seq_len: Length of output sequence (defaults to encoded_seq length)
 
         Returns:
-            x_0_pred: (batch_size, seq_len, embedding_dim) predicted mean of target embeddings
+            x_pred: (batch_size, target_seq_len, embedding_dim) predicted target embeddings
         """
-        batch_size, seq_len, _ = x_t.shape
+        batch_size = encoded_seq.size(0)
+        if target_seq_len is None:
+            target_seq_len = encoded_seq.size(1)
 
         # Embed timestep: (batch_size, embedding_dim)
         t_emb = self.time_embed(t)
 
-        # Broadcast timestep embedding across sequence: (batch_size, seq_len, embedding_dim)
-        t_emb = t_emb.unsqueeze(1).expand(-1, seq_len, -1)
-
-        # Project noised input: (batch_size, seq_len, embedding_dim)
-        x = self.input_proj(x_t)
-
-        # Combine with timestep embedding
-        query = x + t_emb  # (batch_size, seq_len, embedding_dim)
+        # Expand timestep embedding to target sequence length
+        # This serves as the query for cross-attention
+        query = t_emb.unsqueeze(1).expand(-1, target_seq_len, -1)
         query = self.layer_norm(query)
 
         # Apply cross-attention layers
+        # Query: timestep embedding, Key/Value: encoded sequence
         for layer in self.cross_attention_layers:
             query = layer(query, encoded_seq, padding_mask)
 
-        # Predict x_0: (batch_size, seq_len, embedding_dim)
-        x_0_pred = self.output_proj(query)
+        # Predict target embeddings: (batch_size, target_seq_len, embedding_dim)
+        x_pred = self.output_proj(query)
 
-        return x_0_pred
-
-
-class SinusoidalPositionEmbedding(nn.Module):
-    """Sinusoidal timestep embedding as used in Transformer and DDPM"""
-
-    def __init__(self, embedding_dim: int):
-        super().__init__()
-        self.embedding_dim = embedding_dim
-
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            t: (batch_size,) timestep indices
-
-        Returns:
-            embeddings: (batch_size, embedding_dim)
-        """
-        device = t.device
-        half_dim = self.embedding_dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
-        emb = t.float()[:, None] * emb[None, :]
-        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-
-        # Handle odd embedding dimensions
-        if self.embedding_dim % 2 == 1:
-            emb = torch.cat([emb, torch.zeros_like(emb[:, :1])], dim=-1)
-
-        return emb
+        return x_pred
 
 
 class CrossAttentionLayer(nn.Module):
@@ -184,7 +150,7 @@ class CrossAttentionLayer(nn.Module):
     ) -> torch.Tensor:
         """
         Args:
-            query: (batch_size, query_len, embedding_dim) queries from noised targets
+            query: (batch_size, query_len, embedding_dim) queries from timestep embedding
             key_value: (batch_size, seq_len, embedding_dim) encoded sequence
             key_padding_mask: (batch_size, seq_len) mask for padding
 

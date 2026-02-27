@@ -11,7 +11,7 @@ from datetime import datetime
 from tqdm.auto import tqdm
 
 from cddrec import models, data
-from .losses import compute_total_loss
+from .losses import compute_total_loss, compute_single_timestep_loss
 from .utils import evaluate_metrics
 from .data.augmentation import augment_sequence
 
@@ -23,11 +23,11 @@ def train_epoch(
     device: torch.device,
     lambda_contrast: float = 0.1,
     temperature: float = 0.1,
-    margin: float = 1.0,
     augmentation_type: str = "random",
     augmentation_ratio: float = 0.2,
     verbose: bool = True,
     epoch: int | None = None,
+    separate_timestep_updates: bool = False,
 ) -> dict[str, float]:
     """
     Train for one epoch.
@@ -39,11 +39,13 @@ def train_epoch(
         device: Device to train on
         lambda_contrast: Weight for contrastive losses
         temperature: Temperature for contrastive losses
-        margin: Margin for cross-divergence loss
         augmentation_type: Type of augmentation
         augmentation_ratio: Augmentation intensity
         verbose: Whether to show progress bar
         epoch: Current epoch number (for progress bar description)
+        separate_timestep_updates: If True, do separate gradient updates per timestep
+                                    instead of summing all timesteps into one loss.
+                                    This avoids gradient conflicts between timesteps.
 
     Returns:
         Dictionary with average losses
@@ -72,35 +74,92 @@ def train_epoch(
             augmentation_ratio=augmentation_ratio,
         )
 
-        # Forward pass and compute loss
-        loss, loss_dict = compute_total_loss(
-            model=model,
-            sequence=sequence,
-            sequence_aug=sequence_aug,
-            negatives=negatives,
-            lambda_contrast=lambda_contrast,
-            temperature=temperature,
-            margin=margin,
-        )
+        if separate_timestep_updates:
+            # Alternative approach: Separate gradient step per timestep
+            # This avoids mixing gradients from different timesteps in the same backward pass
+            batch_total_loss = 0.0
+            batch_cd_loss = 0.0
+            batch_in_loss = 0.0
+            batch_cross_loss = 0.0
 
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            for t in range(model.num_diffusion_steps):
+                # Compute loss for this timestep only
+                loss_t, loss_dict_t = compute_single_timestep_loss(
+                    model=model,
+                    sequence=sequence,
+                    sequence_aug=sequence_aug,
+                    negatives=negatives,
+                    timestep=t,
+                    lambda_contrast=lambda_contrast,
+                    temperature=temperature,
+                )
 
-        # Accumulate losses
-        total_loss += loss_dict["total_loss"]
-        total_cd_loss += loss_dict["cross_divergence"]
-        total_in_loss += loss_dict["in_view_contrastive"]
-        total_cross_loss += loss_dict["cross_view_contrastive"]
+                # Apply rescaling factor
+                rescale_factor = 1.0 / (t + 1.0)
+                scaled_loss = rescale_factor * loss_t
+
+                # Backward pass for this timestep
+                optimizer.zero_grad()
+                scaled_loss.backward()
+
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+                optimizer.step()
+
+                # Accumulate unscaled losses for logging
+                batch_total_loss += scaled_loss.item()
+                batch_cd_loss += loss_dict_t["cross_divergence"]
+                batch_in_loss += loss_dict_t["in_view_contrastive"]
+                batch_cross_loss += loss_dict_t["cross_view_contrastive"]
+
+            # Average for display
+            total_loss += batch_total_loss
+            total_cd_loss += batch_cd_loss / model.num_diffusion_steps
+            total_in_loss += batch_in_loss / model.num_diffusion_steps
+            total_cross_loss += batch_cross_loss / model.num_diffusion_steps
+
+            # Update progress bar
+            if verbose:
+                pbar.set_postfix({
+                    "loss": f"{batch_total_loss:.4f}",
+                    "cd": f"{batch_cd_loss / model.num_diffusion_steps:.4f}",
+                })
+
+        else:
+            # Original approach: Sum all timesteps, single gradient step
+            loss, loss_dict = compute_total_loss(
+                model=model,
+                sequence=sequence,
+                sequence_aug=sequence_aug,
+                negatives=negatives,
+                lambda_contrast=lambda_contrast,
+                temperature=temperature,
+            )
+
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+
+            # Gradient clipping for stability (all timesteps contribute gradients)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            optimizer.step()
+
+            # Accumulate losses
+            total_loss += loss_dict["total_loss"]
+            total_cd_loss += loss_dict["cross_divergence"]
+            total_in_loss += loss_dict["in_view_contrastive"]
+            total_cross_loss += loss_dict["cross_view_contrastive"]
+
+            # Update progress bar with current loss
+            if verbose:
+                pbar.set_postfix({
+                    "loss": f"{loss_dict['total_loss']:.4f}",
+                    "cd": f"{loss_dict['cross_divergence']:.4f}",
+                })
+
         num_batches += 1
-
-        # Update progress bar with current loss
-        if verbose:
-            pbar.set_postfix({
-                "loss": f"{loss_dict['total_loss']:.4f}",
-                "cd": f"{loss_dict['cross_divergence']:.4f}",
-            })
 
     # Average losses
     avg_losses = {
@@ -216,13 +275,13 @@ def train(
     checkpoint_dir: str = "checkpoints",
     lambda_contrast: float = 0.1,
     temperature: float = 0.1,
-    margin: float = 1.0,
     augmentation_type: str = "random",
     augmentation_ratio: float = 0.2,
     val_metric: str = "val_recall@10",
     val_sample_ratio: float = 1.0,
     val_sample_seed: int = 42,
     verbose: bool = True,
+    separate_timestep_updates: bool = False,
 ) -> tuple[dict[str, list], str]:
     """
     Main training loop with early stopping and checkpointing.
@@ -237,7 +296,6 @@ def train(
         checkpoint_dir: Directory to save checkpoints
         lambda_contrast: Weight for contrastive losses
         temperature: Temperature for contrastive losses
-        margin: Margin for cross-divergence loss
         augmentation_type: Type of augmentation ('mask', 'shuffle', 'crop', 'random')
         augmentation_ratio: Intensity of augmentation (0.0 to 1.0)
         val_metric: Metric to use for early stopping (e.g., 'val_recall@10')
@@ -246,6 +304,9 @@ def train(
                          Use < 1.0 to speed up validation during training.
         val_sample_seed: Random seed for deterministic validation sampling (default: 42)
         verbose: Whether to show progress bars and detailed output
+        separate_timestep_updates: If True, do separate gradient updates per timestep.
+                                    This avoids mixing gradients from different timesteps.
+                                    Default False (sum all timesteps, as in Equation 16).
 
     Returns:
         Tuple of (history, experiment_id) where:
@@ -281,12 +342,12 @@ def train(
             'early_stopping_patience': early_stopping_patience,
             'lambda_contrast': lambda_contrast,
             'temperature': temperature,
-            'margin': margin,
             'augmentation_type': augmentation_type,
             'augmentation_ratio': augmentation_ratio,
             'val_metric': val_metric,
             'val_sample_ratio': val_sample_ratio,
             'val_sample_seed': val_sample_seed,
+            'separate_timestep_updates': separate_timestep_updates,
         },
         'optimizer': {
             'type': type(optimizer).__name__,
@@ -327,11 +388,11 @@ def train(
             device=device,
             lambda_contrast=lambda_contrast,
             temperature=temperature,
-            margin=margin,
             augmentation_type=augmentation_type,
             augmentation_ratio=augmentation_ratio,
             verbose=verbose,
             epoch=epoch + 1,
+            separate_timestep_updates=separate_timestep_updates,
         )
 
         # Validate
