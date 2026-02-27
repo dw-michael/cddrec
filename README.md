@@ -25,35 +25,47 @@ python tests/test_basic.py
 
 ### 2. Prepare Data
 
-The data should be in JSON format:
+Process your raw interaction data using the preprocessing API:
 
-```json
-{
-  "train": {
-    "sequences": [[1, 2, 3], [4, 5, 6]],
-    "targets": [4, 7]
-  },
-  "val": {
-    "sequences": [[1, 2], [4, 5]],
-    "targets": [3, 6]
-  },
-  "test": {
-    "sequences": [[1, 2, 3], [4, 5, 6, 7]],
-    "targets": [4, 8]
-  },
-  "num_users": 100,
-  "num_items": 1000
-}
+```python
+from cddrec.data.preprocessing import preprocess_interactions
+
+# Your raw data: (user_id, item_id, timestamp) tuples
+# user_id/item_id can be any type (str, int, etc.)
+interactions = [
+    ("user_abc", "item_xyz", 1000.0),
+    ("user_abc", "item_123", 1001.0),
+    # ...
+]
+
+# Preprocess and save (handles filtering, splitting, ID mapping)
+result = preprocess_interactions(
+    interactions,
+    min_user_interactions=5,  # Minimum interactions per user
+    min_item_interactions=5,  # Minimum interactions per item
+    output_path="data/processed/my_dataset.json"
+)
+
+# Also works with generators for memory efficiency:
+def stream_from_db():
+    for row in db.execute("SELECT user_id, item_id, timestamp FROM interactions"):
+        yield (row[0], row[1], row[2])
+
+result = preprocess_interactions(stream_from_db(), output_path="data/processed/my_dataset.json")
 ```
 
-Use `cddrec/data/preprocessing.py` utilities to process raw interaction data.
+The API automatically:
+- Converts IDs to model format (0-indexed users, 1-indexed items)
+- Filters users/items by interaction count
+- Splits into train/val/test sets
+- Saves data and ID mappings for later use
 
 ### 3. Train Model
 
 ```bash
+# Use the preprocessed data (num_items is read from the data file)
 python scripts/train.py \
-  --data_path data/processed/dataset.json \
-  --num_items 1000 \
+  --data_path data/processed/my_dataset.json \
   --embedding_dim 128 \
   --diffusion_steps 30 \
   --batch_size 128 \
@@ -65,8 +77,7 @@ python scripts/train.py \
 
 ```bash
 python scripts/evaluate.py \
-  --data_path data/processed/dataset.json \
-  --num_items 1000 \
+  --data_path data/processed/my_dataset.json \
   --checkpoint checkpoints/best_model.pth \
   --split test
 ```
