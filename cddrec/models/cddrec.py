@@ -32,10 +32,11 @@ class CDDRec(nn.Module):
         noise_schedule: str = "linear",
         max_beta: float = 0.1,
         padding_idx: int = 0,
+        mask_idx: int | None = None,
     ):
         """
         Args:
-            num_items: Total number of items in the dataset
+            num_items: Total number of items in the dataset (real items only, not special tokens)
             embedding_dim: Dimension of embeddings
             encoder_layers: Number of transformer encoder layers
             decoder_layers: Number of cross-attention decoder layers
@@ -45,9 +46,14 @@ class CDDRec(nn.Module):
             num_diffusion_steps: Number of diffusion steps (T)
             noise_schedule: 'linear' or 'cosine'
             max_beta: Maximum noise variance for linear schedule
-            padding_idx: Index used for padding tokens
+            padding_idx: Index used for padding tokens (default: 0)
+            mask_idx: Index used for mask tokens in augmentation (default: num_items + 1).
+                     If None, defaults to num_items + 1.
         """
         super().__init__()
+
+        # Mask token index: defaults to num_items + 1
+        self.mask_idx = mask_idx if mask_idx is not None else num_items + 1
 
         # Store hyperparameters for serialization/logging
         self.config = {
@@ -62,6 +68,7 @@ class CDDRec(nn.Module):
             'noise_schedule': noise_schedule,
             'max_beta': max_beta,
             'padding_idx': padding_idx,
+            'mask_idx': self.mask_idx,
         }
 
         self.num_items = num_items
@@ -70,8 +77,10 @@ class CDDRec(nn.Module):
         self.padding_idx = padding_idx
 
         # Sequence Encoder
+        # Embedding table size = num_items + 2 (for padding=0 and mask=num_items+1)
+        # Items are indexed [1, num_items], 0 is padding, num_items+1 is mask
         self.encoder = SequenceEncoder(
-            num_items=num_items,
+            num_items=num_items + 2,  # +2 for padding and mask tokens
             embedding_dim=embedding_dim,
             num_layers=encoder_layers,
             num_heads=num_heads,

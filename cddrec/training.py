@@ -23,8 +23,9 @@ def train_epoch(
     device: torch.device,
     lambda_contrast: float = 0.1,
     temperature: float = 0.1,
-    augmentation_type: str = "random",
-    augmentation_ratio: float = 0.2,
+    mask_ratio: float = 0.3,
+    shuffle_ratio: float = 0.6,
+    crop_keep_ratio: float = 0.6,
     verbose: bool = True,
     epoch: int | None = None,
     separate_timestep_updates: bool = False,
@@ -39,8 +40,9 @@ def train_epoch(
         device: Device to train on
         lambda_contrast: Weight for contrastive losses
         temperature: Temperature for contrastive losses
-        augmentation_type: Type of augmentation
-        augmentation_ratio: Augmentation intensity
+        mask_ratio: Fraction of items to mask (default: 0.3, authors' gamma)
+        shuffle_ratio: Fraction of items to shuffle (default: 0.6, authors' beta)
+        crop_keep_ratio: Fraction of items to KEEP in crop (default: 0.6, authors' eta)
         verbose: Whether to show progress bar
         epoch: Current epoch number (for progress bar description)
         separate_timestep_updates: If True, do separate gradient updates per timestep
@@ -67,11 +69,14 @@ def train_epoch(
         sequence = batch["sequence"].to(device)
         negatives = batch["negatives"].to(device)
 
-        # Augment sequence
+        # Augment sequence (randomly chooses one of mask/shuffle/crop)
         sequence_aug = augment_sequence(
             sequence,
-            augmentation_type=augmentation_type,
-            augmentation_ratio=augmentation_ratio,
+            mask_token=model.mask_idx,
+            pad_token=model.padding_idx,
+            mask_ratio=mask_ratio,
+            shuffle_ratio=shuffle_ratio,
+            crop_keep_ratio=crop_keep_ratio,
         )
 
         if separate_timestep_updates:
@@ -275,8 +280,9 @@ def train(
     checkpoint_dir: str = "checkpoints",
     lambda_contrast: float = 0.1,
     temperature: float = 0.1,
-    augmentation_type: str = "random",
-    augmentation_ratio: float = 0.2,
+    mask_ratio: float = 0.3,
+    shuffle_ratio: float = 0.6,
+    crop_keep_ratio: float = 0.6,
     val_metric: str = "val_recall@10",
     val_sample_ratio: float = 1.0,
     val_sample_seed: int = 42,
@@ -296,8 +302,9 @@ def train(
         checkpoint_dir: Directory to save checkpoints
         lambda_contrast: Weight for contrastive losses
         temperature: Temperature for contrastive losses
-        augmentation_type: Type of augmentation ('mask', 'shuffle', 'crop', 'random')
-        augmentation_ratio: Intensity of augmentation (0.0 to 1.0)
+        mask_ratio: Fraction of items to mask (default: 0.3, authors' gamma)
+        shuffle_ratio: Fraction of items to shuffle (default: 0.6, authors' beta)
+        crop_keep_ratio: Fraction of items to KEEP in crop (default: 0.6, authors' eta)
         val_metric: Metric to use for early stopping (e.g., 'val_recall@10')
         val_sample_ratio: Fraction of validation data to use per epoch (default: 1.0).
                          E.g., 0.2 = validate on 20% of data. Sampling is deterministic.
@@ -342,8 +349,9 @@ def train(
             'early_stopping_patience': early_stopping_patience,
             'lambda_contrast': lambda_contrast,
             'temperature': temperature,
-            'augmentation_type': augmentation_type,
-            'augmentation_ratio': augmentation_ratio,
+            'mask_ratio': mask_ratio,
+            'shuffle_ratio': shuffle_ratio,
+            'crop_keep_ratio': crop_keep_ratio,
             'val_metric': val_metric,
             'val_sample_ratio': val_sample_ratio,
             'val_sample_seed': val_sample_seed,
@@ -388,8 +396,9 @@ def train(
             device=device,
             lambda_contrast=lambda_contrast,
             temperature=temperature,
-            augmentation_type=augmentation_type,
-            augmentation_ratio=augmentation_ratio,
+            mask_ratio=mask_ratio,
+            shuffle_ratio=shuffle_ratio,
+            crop_keep_ratio=crop_keep_ratio,
             verbose=verbose,
             epoch=epoch + 1,
             separate_timestep_updates=separate_timestep_updates,

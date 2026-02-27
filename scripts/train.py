@@ -70,12 +70,15 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.5,
                         help="Temperature for contrastive losses (authors use 0.5)")
 
-    # Augmentation arguments
-    parser.add_argument("--augmentation", type=str, default="random",
-                        choices=["mask", "shuffle", "crop", "random"],
-                        help="Augmentation type")
-    parser.add_argument("--augmentation_ratio", type=float, default=0.2,
-                        help="Augmentation intensity")
+    # Augmentation arguments (matches authors' implementation)
+    # Note: Augmentation type is always random (mask/shuffle/crop chosen randomly per batch)
+    # This matches the authors' implementation - they don't have a parameter to select type
+    parser.add_argument("--mask_ratio", type=float, default=0.3,
+                        help="Fraction of items to mask (authors' gamma=0.3)")
+    parser.add_argument("--shuffle_ratio", type=float, default=0.6,
+                        help="Fraction of items to shuffle (authors' beta=0.6)")
+    parser.add_argument("--crop_keep_ratio", type=float, default=0.6,
+                        help="Fraction of items to KEEP in crop (authors' eta=0.6)")
 
     # Training strategy arguments
     parser.add_argument("--separate_timestep_updates", action="store_true",
@@ -175,8 +178,9 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         lambda_contrast=args.lambda_contrast,
         temperature=args.temperature,
-        augmentation_type=args.augmentation,
-        augmentation_ratio=args.augmentation_ratio,
+        mask_ratio=args.mask_ratio,
+        shuffle_ratio=args.shuffle_ratio,
+        crop_keep_ratio=args.crop_keep_ratio,
         val_sample_ratio=args.val_sample_ratio,
         val_sample_seed=args.val_sample_seed,
         verbose=verbose,

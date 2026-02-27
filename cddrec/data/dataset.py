@@ -26,6 +26,7 @@ class SeqRecDataset(Dataset):
         num_items: int,
         max_seq_len: int = 20,
         pad_token: int = 0,
+        mask_token: int | None = None,
         train_mode: bool = True,
         seed: int | None = None,
         min_subseq_len: int = 2,
@@ -35,7 +36,9 @@ class SeqRecDataset(Dataset):
             sequences: List of full sequences (history + target as last item)
             num_items: Total number of items (for negative sampling)
             max_seq_len: Maximum sequence length (pad/truncate to this)
-            pad_token: Padding token ID
+            pad_token: Padding token ID (default: 0)
+            mask_token: Special mask token ID for augmentation (default: num_items + 1).
+                       If None, defaults to num_items + 1.
             train_mode: If True, randomly sample subsequences during training.
                        If False, use full sequences (for val/test).
             seed: Random seed for subsequence sampling (for reproducibility).
@@ -54,6 +57,7 @@ class SeqRecDataset(Dataset):
         self.num_items = num_items
         self.max_seq_len = max_seq_len
         self.pad_token = pad_token
+        self.mask_token = mask_token if mask_token is not None else num_items + 1
         self.train_mode = train_mode
         self.min_subseq_len = min_subseq_len
 

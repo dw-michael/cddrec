@@ -80,73 +80,72 @@ def in_view_contrastive_loss(
 ) -> torch.Tensor:
     """
     In-view contrastive loss: aligns predicted embeddings with corrupted embeddings
-    at the same diffusion step, within each sequence.
+    at the same diffusion step.
+
+    UPDATED: Now uses BATCH-LEVEL contrastive (matches authors' XNetLoss):
+    - Flattens to (B*S, D) treating all positions as independent samples
+    - Each position contrasts against ALL other positions across the batch
+    - Positive pair: x_pred[i] with x_t[i] (same position)
+    - Negative samples: ALL other B*S - 1 positions
 
     From paper Equation 14:
-        L_in^t = -(1/N) ∑_{i=1}^N log [exp(x̂_i^T x_i / τ) /
-                                        (∑_j exp(x̂_i^T x_j / τ) + ∑_{j≠i} exp(x̂_i^T x̂_j / τ))]
+        L_in^t = -(1/N) ∑_{i=1}^N log [exp(x̂_i^T x_i / τ) / ∑_j exp(x̂_i^T x_j / τ)]
 
-    Where:
-        x̂_i: sampled predicted embedding for position i (Eq. 10: x̂_t = μ_θ + sqrt(β_t) * ε)
-        x_i: noised embedding at step t for position i (from diffuser via Eq. 11)
-        i, j: positions within the same sequence
-        τ: temperature parameter
-
-    Key architectural note: x_pred_t and x_t are computed independently:
-        - μ_θ = decoder(t, encoded_seq) - mean prediction from (timestep, history)
-        - x_pred_t = diffuser.sample_prediction(μ_θ, t) - sampled via Eq. 10
-        - x_t = diffuser.add_noise(target_embeddings, t) - noised target via Eq. 11
-
-    Applies InfoNCE within each sequence separately (not across the batch).
-    Position i in a sequence is contrasted against other positions j in the
-    same sequence, not against positions from other sequences in the batch.
+    Where i, j range over ALL positions in the batch (batch_size * seq_len).
 
     Args:
         x_pred_t: (batch_size, seq_len, embedding_dim) sampled predicted embeddings
-                  (x̂_t = μ_θ + sqrt(β_t) * ε from Equation 10)
         x_t: (batch_size, seq_len, embedding_dim) noised target embeddings
-             (from Equation 11: x_t = √(ᾱ_t) x_0 + √(1 - ᾱ_t) ε)
         mask: (batch_size, seq_len) boolean mask. True = valid data, False = padding
         temperature: Temperature parameter for softmax
 
     Returns:
         Scalar loss value
     """
-    batch_size, seq_len, embedding_dim = x_pred_t.shape
+    B, S, D = x_pred_t.shape
 
-    # Apply mask before normalization to avoid issues with padding
+    # Flatten to treat all positions as independent samples
+    view1 = x_pred_t.view(-1, D)  # (B*S, D)
+    view2 = x_t.view(-1, D)  # (B*S, D)
+
+    # Apply mask to zero out padding (authors don't do this, but we should for correctness)
     if mask is not None:
-        mask_expanded = mask.unsqueeze(-1).float()  # (batch, seq, 1)
-        x_pred_t = x_pred_t * mask_expanded
-        x_t = x_t * mask_expanded
+        mask_flat = mask.view(-1, 1).float()  # (B*S, 1)
+        view1 = view1 * mask_flat
+        view2 = view2 * mask_flat
 
-    # Normalize embeddings (eps prevents division by zero)
-    x_pred_t = F.normalize(x_pred_t, dim=-1, eps=1e-8)  # (batch, seq, emb)
-    x_t = F.normalize(x_t, dim=-1, eps=1e-8)  # (batch, seq, emb)
+    # Normalize embeddings
+    view1 = F.normalize(view1, p=2, dim=1)  # (B*S, D)
+    view2 = F.normalize(view2, p=2, dim=1)  # (B*S, D)
 
-    # Compute similarity matrix within each sequence
-    # For each batch b: logits[b] = x_pred_t[b] @ x_t[b].T
-    logits = torch.bmm(x_pred_t, x_t.transpose(1, 2)) / temperature
-    # Shape: (batch, seq, seq)
+    # Concatenate views: [view1; view2]
+    features = torch.cat([view1, view2], dim=0)  # (2*B*S, D)
 
-    # Labels: diagonal matching (position i should match position i)
-    labels = torch.arange(seq_len, device=x_pred_t.device)
-    labels = labels.unsqueeze(0).expand(batch_size, -1)  # (batch, seq)
+    # Compute global similarity matrix
+    similarity = torch.matmul(features, features.T) / temperature  # (2*B*S, 2*B*S)
 
-    # Reshape for cross_entropy: (batch * seq, seq) and (batch * seq,)
-    logits_flat = logits.reshape(batch_size * seq_len, seq_len)
-    labels_flat = labels.reshape(-1)
+    # Extract positive pairs: view1[i] with view2[i]
+    batch_size = view1.shape[0]  # B*S
+    sim_ij = torch.diag(similarity, batch_size)  # view1[i] · view2[i]
+    sim_ji = torch.diag(similarity, -batch_size)  # view2[i] · view1[i]
+    positives = torch.cat([sim_ij, sim_ji], dim=0)  # (2*B*S,)
 
-    # Compute cross-entropy
-    loss = F.cross_entropy(logits_flat, labels_flat, reduction='none')
-    loss = loss.reshape(batch_size, seq_len)
+    # Mask out self-similarity (diagonal)
+    mask_eye = (~torch.eye(batch_size * 2, batch_size * 2, dtype=bool, device=features.device)).float()
 
-    # Apply mask to loss: zero out padding positions
+    # Compute InfoNCE loss
+    nominator = torch.exp(positives)
+    denominator = (mask_eye * torch.exp(similarity)).sum(dim=1)
+
+    losses = -torch.log(nominator / (denominator + 1e-8))
+
+    # Apply mask to losses (only compute on valid positions)
     if mask is not None:
-        loss = loss * mask.float()  # Zero out padding
-        return loss.sum() / mask.sum().clamp(min=1)  # Average over valid positions only
-    else:
-        return loss.mean()
+        mask_double = torch.cat([mask_flat, mask_flat], dim=0).squeeze()  # (2*B*S,)
+        losses = losses * mask_double
+        return losses.sum() / (mask_double.sum() + 1e-8)
+
+    return losses.mean()
 
 
 def cross_view_contrastive_loss(
@@ -158,66 +157,70 @@ def cross_view_contrastive_loss(
     """
     Cross-view contrastive loss: ensures robustness to data augmentation.
 
+    UPDATED: Now uses BATCH-LEVEL contrastive (matches authors' XNetLossCrossView):
+    - Flattens to (B*S, D) treating all positions as independent samples
+    - Each position contrasts against ALL other positions across the batch
+    - Positive pair: x_pred[i] with x_pred_aug[i] (same position in both views)
+    - Negative samples: ALL other B*S - 1 positions
+
     From paper Equation 15:
-        L_cross^t = -(1/N) ∑_{i=1}^N log [exp(x̂_i^T x̃_i / τ) /
-                                           (∑_j exp(x̂_i^T x̃_j / τ) + ∑_{j≠i} exp(x̂_i^T x̂_j / τ))]
+        L_cross^t = -(1/N) ∑_{i=1}^N log [exp(x̂_i^T x̃_i / τ) / ∑_j exp(x̂_i^T x̃_j / τ)]
 
-    Where:
-        x̂_i: sampled predicted embedding from original sequence at position i
-        x̃_i: sampled predicted embedding from augmented sequence at position i
-        i, j: positions within the same sequence
-        τ: temperature parameter
-
-    Applies InfoNCE within each sequence separately (not across the batch).
-    Aligns predictions from original and augmented sequences, promoting robustness
-    to input perturbations. The augmentation simulates noise in user behavior
-    (e.g., missing interactions, reordering).
+    Where i, j range over ALL positions in the batch (batch_size * seq_len).
 
     Args:
-        x_pred_t: (batch_size, seq_len, embedding_dim) sampled predictions from original sequence
-                  (x̂_t = μ_θ + sqrt(β_t) * ε from Equation 10)
-        x_pred_t_aug: (batch_size, seq_len, embedding_dim) sampled predictions from augmented sequence
+        x_pred_t: (batch_size, seq_len, embedding_dim) predictions from original sequence
+        x_pred_t_aug: (batch_size, seq_len, embedding_dim) predictions from augmented sequence
         mask: (batch_size, seq_len) boolean mask. True = valid data, False = padding
         temperature: Temperature parameter
 
     Returns:
         Scalar loss value
     """
-    batch_size, seq_len, embedding_dim = x_pred_t.shape
+    B, S, D = x_pred_t.shape
 
-    # Apply mask before normalization
+    # Flatten to treat all positions as independent samples
+    view1 = x_pred_t.view(-1, D)  # (B*S, D)
+    view2 = x_pred_t_aug.view(-1, D)  # (B*S, D)
+
+    # Apply mask to zero out padding (authors don't do this, but we should for correctness)
     if mask is not None:
-        mask_expanded = mask.unsqueeze(-1).float()  # (batch, seq, 1)
-        x_pred_t = x_pred_t * mask_expanded
-        x_pred_t_aug = x_pred_t_aug * mask_expanded
+        mask_flat = mask.view(-1, 1).float()  # (B*S, 1)
+        view1 = view1 * mask_flat
+        view2 = view2 * mask_flat
 
     # Normalize embeddings
-    x_pred_t = F.normalize(x_pred_t, dim=-1, eps=1e-8)
-    x_pred_t_aug = F.normalize(x_pred_t_aug, dim=-1, eps=1e-8)
+    view1 = F.normalize(view1, p=2, dim=1)  # (B*S, D)
+    view2 = F.normalize(view2, p=2, dim=1)  # (B*S, D)
 
-    # Compute similarity matrix within each sequence
-    # For each batch b: logits[b] = x_pred_t[b] @ x_pred_t_aug[b].T
-    logits = torch.bmm(x_pred_t, x_pred_t_aug.transpose(1, 2)) / temperature
-    # Shape: (batch, seq, seq)
+    # Concatenate views: [view1; view2]
+    features = torch.cat([view1, view2], dim=0)  # (2*B*S, D)
 
-    # Labels: diagonal matching (position i should match position i)
-    labels = torch.arange(seq_len, device=x_pred_t.device)
-    labels = labels.unsqueeze(0).expand(batch_size, -1)  # (batch, seq)
+    # Compute global similarity matrix
+    similarity = torch.matmul(features, features.T) / temperature  # (2*B*S, 2*B*S)
 
-    # Reshape for cross_entropy: (batch * seq, seq) and (batch * seq,)
-    logits_flat = logits.reshape(batch_size * seq_len, seq_len)
-    labels_flat = labels.reshape(-1)
+    # Extract positive pairs: view1[i] with view2[i]
+    batch_size = view1.shape[0]  # B*S
+    sim_ij = torch.diag(similarity, batch_size)  # view1[i] · view2[i]
+    sim_ji = torch.diag(similarity, -batch_size)  # view2[i] · view1[i]
+    positives = torch.cat([sim_ij, sim_ji], dim=0)  # (2*B*S,)
 
-    # Compute cross-entropy
-    loss = F.cross_entropy(logits_flat, labels_flat, reduction='none')
-    loss = loss.reshape(batch_size, seq_len)
+    # Mask out self-similarity (diagonal)
+    mask_eye = (~torch.eye(batch_size * 2, batch_size * 2, dtype=bool, device=features.device)).float()
 
-    # Apply mask to loss: zero out padding positions
+    # Compute InfoNCE loss
+    nominator = torch.exp(positives)
+    denominator = (mask_eye * torch.exp(similarity)).sum(dim=1)
+
+    losses = -torch.log(nominator / (denominator + 1e-8))
+
+    # Apply mask to losses (only compute on valid positions)
     if mask is not None:
-        loss = loss * mask.float()  # Zero out padding
-        return loss.sum() / mask.sum().clamp(min=1)  # Average over valid positions only
-    else:
-        return loss.mean()
+        mask_double = torch.cat([mask_flat, mask_flat], dim=0).squeeze()  # (2*B*S,)
+        losses = losses * mask_double
+        return losses.sum() / (mask_double.sum() + 1e-8)
+
+    return losses.mean()
 
 
 def compute_single_timestep_loss(
@@ -248,9 +251,9 @@ def compute_single_timestep_loss(
         loss: Scalar loss for this timestep (before rescaling)
         loss_dict: Dictionary with loss components
     """
-    # Forward pass at this timestep
+    # Forward pass at this timestep for both original and augmented views
     x_pred_t, x_t, input_mask, target_mask = model.forward_train(sequence, timestep)
-    x_pred_t_aug, _, _, _ = model.forward_train(sequence_aug, timestep)
+    x_pred_t_aug, _, input_mask_aug, target_mask_aug = model.forward_train(sequence_aug, timestep)
 
     # Get clean negative embeddings and noise them at this timestep
     neg_seq = negatives[:, 1:]  # (batch_size, seq_len-1)
@@ -263,16 +266,21 @@ def compute_single_timestep_loss(
     x_t_neg = model.diffuser.add_noise(x_0_neg, timestep_tensor)
 
     # Compute losses at this timestep
+    # Cross-divergence on BOTH original and augmented views (matches authors)
     l_cd = cross_divergence_loss(x_pred_t, x_t, x_t_neg, target_mask)
+    l_cd_aug = cross_divergence_loss(x_pred_t_aug, x_t, x_t_neg, target_mask_aug)
+
+    # Contrastive losses
     l_in = in_view_contrastive_loss(x_pred_t, x_t, target_mask, temperature)
     l_cross = cross_view_contrastive_loss(x_pred_t, x_pred_t_aug, target_mask, temperature)
 
     # Combine losses (without rescaling - that's done in the training loop)
-    loss = l_cd + lambda_contrast * (l_in + l_cross)
+    # Matches authors: loss_t + loss_t_aug + 0.3*loss_clr + 0.3*loss_crossview
+    loss = (l_cd + l_cd_aug) + lambda_contrast * (l_in + l_cross)
 
     # Loss dictionary for logging
     loss_dict = {
-        "cross_divergence": l_cd.item(),
+        "cross_divergence": (l_cd.item() + l_cd_aug.item()) / 2,  # Average of both views
         "in_view_contrastive": l_in.item(),
         "cross_view_contrastive": l_cross.item(),
     }
