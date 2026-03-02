@@ -31,9 +31,10 @@ class SequenceEncoder(nn.Module):
         self,
         num_items: int,
         embedding_dim: int = 128,
-        num_layers: int = 2,
-        num_heads: int = 2,
-        dropout: float = 0.2,
+        num_layers: int = 1,
+        num_heads: int = 4,
+        attention_dropout: float = 0.2,
+        hidden_dropout: float = 0.0,
         max_seq_len: int = 20,
         padding_idx: int = 0,
     ):
@@ -43,7 +44,8 @@ class SequenceEncoder(nn.Module):
             embedding_dim: Dimension of item embeddings
             num_layers: Number of transformer encoder layers
             num_heads: Number of attention heads
-            dropout: Dropout probability
+            attention_dropout: Dropout probability for attention weights (authors: 0.2)
+            hidden_dropout: Dropout probability for hidden states (authors: 0.0)
             max_seq_len: Maximum sequence length
             padding_idx: Index used for padding tokens
         """
@@ -55,9 +57,9 @@ class SequenceEncoder(nn.Module):
         self.padding_idx = padding_idx
 
         # Item embeddings (randomly initialized, learned during training)
-        # Add 1 for padding token
+        # num_items already includes special tokens (padding + mask)
         self.item_embedding = nn.Embedding(
-            num_items + 1,
+            num_items,
             embedding_dim,
             padding_idx=padding_idx
         )
@@ -66,20 +68,29 @@ class SequenceEncoder(nn.Module):
         self.position_embedding = nn.Embedding(max_seq_len, embedding_dim)
 
         # Transformer encoder layers
+        # Authors use dim_feedforward=hidden_size (1x, not 4x), we keep 4x for now
+        # but set hidden_dropout separately to match authors' behavior
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embedding_dim,
             nhead=num_heads,
-            dim_feedforward=embedding_dim * 4,
-            dropout=dropout,
+            dim_feedforward=embedding_dim * 4,  # We use 4x, authors use 1x
+            dropout=attention_dropout,  # This sets the default for all dropouts initially
             activation="gelu",
             batch_first=True,
         )
+
+        # Configure separate dropout rates to match authors' implementation
+        # Authors: attention_probs_dropout_prob=0.2, hidden_dropout_prob=0.0
+        encoder_layer.dropout1.p = attention_dropout  # Dropout after self-attention
+        encoder_layer.dropout2.p = hidden_dropout     # Dropout after FFN
+        encoder_layer.dropout.p = hidden_dropout      # Dropout in FFN activation
+
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer,
             num_layers=num_layers,
         )
 
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(hidden_dropout)
         self.layer_norm = nn.LayerNorm(embedding_dim)
 
         self._init_weights()

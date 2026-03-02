@@ -22,7 +22,7 @@ def train_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     lambda_contrast: float = 0.1,
-    temperature: float = 0.1,
+    temperature: float = 0.5,  # Authors use 0.5 (was 0.1)
     mask_ratio: float = 0.3,
     shuffle_ratio: float = 0.6,
     crop_keep_ratio: float = 0.6,
@@ -279,7 +279,7 @@ def train(
     early_stopping_patience: int | None = 50,
     checkpoint_dir: str = "checkpoints",
     lambda_contrast: float = 0.1,
-    temperature: float = 0.1,
+    temperature: float = 0.5,  # Authors use 0.5 (was 0.1)
     mask_ratio: float = 0.3,
     shuffle_ratio: float = 0.6,
     crop_keep_ratio: float = 0.6,

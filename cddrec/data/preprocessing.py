@@ -478,3 +478,48 @@ def create_reverse_mappings(
     reverse_user_mapping = {v: k for k, v in user_mapping.items()}
     reverse_item_mapping = {v: k for k, v in item_mapping.items()}
     return reverse_user_mapping, reverse_item_mapping
+
+
+def convert_to_author_format(json_path: str, output_path: str) -> None:
+    """
+    Convert preprocessed JSON data to the researchers' text format.
+
+    The researchers' code expects one file with format:
+        user_id item1 item2 item3 ...
+
+    This function converts the JSON format (with separate train/val/test splits)
+    into a single unified text file where each user has their complete sequence.
+
+    Args:
+        json_path: Path to preprocessed JSON file
+        output_path: Path to output text file
+
+    Example:
+        >>> # In a notebook
+        >>> from cddrec.data import convert_to_author_format
+        >>> convert_to_author_format('data/beauty.json', 'cddrec_authors/data/beauty.txt')
+
+        >>> # Then run researchers' code
+        >>> # cd cddrec_authors
+        >>> # python main.py --data_name beauty --data_augmentation --linear_infonce
+    """
+    # Load JSON data
+    data = load_processed_data(json_path)
+
+    # Use test split which contains complete sequences
+    test_sequences = data['test']['sequences']
+    test_user_ids = data['test']['user_ids']
+
+    # Write to text file
+    with open(output_path, 'w') as f:
+        for user_id, sequence in zip(test_user_ids, test_sequences):
+            # Format: user_id item1 item2 item3 ...
+            items_str = ' '.join(map(str, sequence))
+            f.write(f"{user_id} {items_str}\n")
+
+    print(f"Converted {len(test_sequences)} user sequences")
+    print(f"  Input:  {json_path}")
+    print(f"  Output: {output_path}")
+    print(f"\nItems range: 1 to {data['num_items']}")
+    print(f"Users range: 0 to {data['num_users']-1}")
+    print(f"Special tokens: 0 (padding), {data['num_items']+1} (mask)")

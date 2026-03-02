@@ -76,7 +76,7 @@ def in_view_contrastive_loss(
     x_pred_t: torch.Tensor,
     x_t: torch.Tensor,
     mask: torch.Tensor | None = None,
-    temperature: float = 0.1,
+    temperature: float = 0.5,  # Authors use 0.5 (was 0.1)
 ) -> torch.Tensor:
     """
     In-view contrastive loss: aligns predicted embeddings with corrupted embeddings
@@ -152,7 +152,7 @@ def cross_view_contrastive_loss(
     x_pred_t: torch.Tensor,
     x_pred_t_aug: torch.Tensor,
     mask: torch.Tensor | None = None,
-    temperature: float = 0.1,
+    temperature: float = 0.5,  # Authors use 0.5 (was 0.1)
 ) -> torch.Tensor:
     """
     Cross-view contrastive loss: ensures robustness to data augmentation.
@@ -230,7 +230,7 @@ def compute_single_timestep_loss(
     negatives: torch.Tensor,
     timestep: int,
     lambda_contrast: float = 0.1,
-    temperature: float = 0.1,
+    temperature: float = 0.5,  # Authors use 0.5 (was 0.1)
 ) -> tuple[torch.Tensor, dict]:
     """
     Compute CDDRec loss for a single diffusion timestep.
@@ -294,7 +294,7 @@ def compute_total_loss(
     sequence_aug: torch.Tensor,
     negatives: torch.Tensor,
     lambda_contrast: float = 0.1,
-    temperature: float = 0.1,
+    temperature: float = 0.5,  # Authors use 0.5 (was 0.1)
 ) -> tuple[torch.Tensor, dict]:
     """
     Compute total CDDRec loss over all diffusion timesteps.

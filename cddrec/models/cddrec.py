@@ -23,14 +23,15 @@ class CDDRec(nn.Module):
         self,
         num_items: int,
         embedding_dim: int = 128,
-        encoder_layers: int = 2,
-        decoder_layers: int = 2,
-        num_heads: int = 2,
-        dropout: float = 0.2,
+        encoder_layers: int = 1,  # Authors use 1 layer
+        decoder_layers: int = 1,  # Authors use 1 layer (NOTE: they call it once but it's a single TransformerDecoderLayer)
+        num_heads: int = 4,  # Authors use 4 heads (from main.py:31)
+        attention_dropout: float = 0.2,  # Authors: dropout on attention weights
+        hidden_dropout: float = 0.0,  # Authors: dropout on hidden states (0.0 = disabled)
         max_seq_len: int = 20,
-        num_diffusion_steps: int = 30,
+        num_diffusion_steps: int = 20,  # Authors use 20
         noise_schedule: str = "linear",
-        max_beta: float = 0.1,
+        max_beta: float = 0.002,  # Authors use 0.002
         padding_idx: int = 0,
         mask_idx: int | None = None,
     ):
@@ -39,9 +40,10 @@ class CDDRec(nn.Module):
             num_items: Total number of items in the dataset (real items only, not special tokens)
             embedding_dim: Dimension of embeddings
             encoder_layers: Number of transformer encoder layers
-            decoder_layers: Number of cross-attention decoder layers
+            decoder_layers: Number of transformer decoder layers (authors use 1)
             num_heads: Number of attention heads
-            dropout: Dropout probability
+            attention_dropout: Dropout probability for attention weights
+            hidden_dropout: Dropout probability for hidden states (authors use 0.0)
             max_seq_len: Maximum sequence length
             num_diffusion_steps: Number of diffusion steps (T)
             noise_schedule: 'linear' or 'cosine'
@@ -62,7 +64,8 @@ class CDDRec(nn.Module):
             'encoder_layers': encoder_layers,
             'decoder_layers': decoder_layers,
             'num_heads': num_heads,
-            'dropout': dropout,
+            'attention_dropout': attention_dropout,
+            'hidden_dropout': hidden_dropout,
             'max_seq_len': max_seq_len,
             'num_diffusion_steps': num_diffusion_steps,
             'noise_schedule': noise_schedule,
@@ -84,7 +87,8 @@ class CDDRec(nn.Module):
             embedding_dim=embedding_dim,
             num_layers=encoder_layers,
             num_heads=num_heads,
-            dropout=dropout,
+            attention_dropout=attention_dropout,
+            hidden_dropout=hidden_dropout,
             max_seq_len=max_seq_len,
             padding_idx=padding_idx,
         )
@@ -94,7 +98,7 @@ class CDDRec(nn.Module):
             embedding_dim=embedding_dim,
             num_layers=decoder_layers,
             num_heads=num_heads,
-            dropout=dropout,
+            dropout=attention_dropout,  # Use attention_dropout for decoder
             num_diffusion_steps=num_diffusion_steps,
         )
 

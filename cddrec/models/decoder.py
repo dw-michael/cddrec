@@ -1,4 +1,4 @@
-"""Conditional Denoising Decoder with cross-attention mechanism"""
+"""Conditional Denoising Decoder using TransformerDecoderLayer"""
 
 import torch
 import torch.nn as nn
@@ -6,41 +6,44 @@ import torch.nn as nn
 
 class ConditionalDenoisingDecoder(nn.Module):
     """
-    Generates target item embeddings conditioned ONLY on encoded sequences and timestep.
+    Generates target item embeddings conditioned on encoded sequences and timestep.
 
-    CRITICAL: This decoder does NOT take noised embeddings (x_t) as input!
+    UPDATED: Now uses PyTorch's TransformerDecoderLayer to match the authors' implementation.
 
-    From paper Equation 9 (Section 4.2):
-        μ_θ(es, t) = CA(es, e_t) = Softmax((e_t W_Q)(es W_K)^T / √d)(es W_V)
+    Authors' implementation (models.py:32, 218):
+        self.decoder = nn.TransformerDecoderLayer(...)
+        model_output = self.decoder(conditional_emb, time_emb)
 
-    The decoder predicts x̂_t directly from:
-        - es: encoded sequence from encoder
-        - e_t: timestep embedding (learnable embedding table)
+    Where:
+        - tgt = conditional_emb: encoded sequence (B, S, D) - flows through to output
+        - memory = time_emb: timestep embeddings (B, S, D) - provides conditioning
 
-    The noised embeddings x_t from the diffuser are used ONLY as targets for
-    loss computation, NOT as inputs to this decoder.
+    The TransformerDecoderLayer:
+        1. Self-attention on tgt (conditional_emb attends to itself)
+        2. Cross-attention: Q=tgt (after self-attn), K/V=memory (time_emb)
+        3. Feed-forward network
+        4. Returns refined tgt (same shape)
 
-    Architecture:
-    - Query: timestep embedding e_t (expanded to target sequence length)
-    - Key/Value: encoded sequence representations es
-    - Causal masking for autoregressive generation
-    - Output: predicted target embeddings x̂_t
+    This is MORE expressive than our previous simple cross-attention because:
+        - Self-attention allows the encoded sequence to refine itself
+        - Then cross-attends with time information
+        - The decoder does heavy lifting to generate good predictions
     """
 
     def __init__(
         self,
         embedding_dim: int = 128,
-        num_layers: int = 2,
-        num_heads: int = 2,
+        num_layers: int = 1,
+        num_heads: int = 4,
         dropout: float = 0.2,
-        num_diffusion_steps: int = 30,
+        num_diffusion_steps: int = 20,
     ):
         """
         Args:
             embedding_dim: Dimension of embeddings
-            num_layers: Number of cross-attention layers
-            num_heads: Number of attention heads
-            dropout: Dropout probability
+            num_layers: Number of decoder layers (authors use 1)
+            num_heads: Number of attention heads (authors use 4)
+            dropout: Dropout probability (authors use 0.2 for attention, 0.0 for hidden)
             num_diffusion_steps: Number of diffusion steps (for timestep embedding)
         """
         super().__init__()
@@ -51,30 +54,27 @@ class ConditionalDenoisingDecoder(nn.Module):
         # Timestep embedding: learnable embedding table (as per paper)
         # "Initially, we acquire a learnable embedding et for the indicator t
         # from a time lookup embedding table" (paper lines 610-611)
-        # This creates the query for cross-attention
         self.time_embed = nn.Embedding(num_diffusion_steps, embedding_dim)
 
-        # Cross-attention layers
-        # Query: timestep embedding, Key/Value: encoded sequence
-        self.cross_attention_layers = nn.ModuleList([
-            CrossAttentionLayer(
-                embedding_dim=embedding_dim,
-                num_heads=num_heads,
-                dropout=dropout,
-            )
-            for _ in range(num_layers)
-        ])
-
-        # Output projection to predict target embeddings
-        self.output_proj = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(embedding_dim, embedding_dim),
+        # TransformerDecoderLayer (matching authors' implementation)
+        # Authors use dim_feedforward=hidden_size (1x expansion, not 4x)
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=embedding_dim,
+            nhead=num_heads,
+            dim_feedforward=embedding_dim,  # Authors use 1x (not 4x like standard)
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
         )
 
+        # Stack decoder layers (authors use num_layers=1, but support more)
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer,
+            num_layers=num_layers,
+        )
+
+        # Layer norm for output (authors use this)
         self.layer_norm = nn.LayerNorm(embedding_dim)
-        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
@@ -84,117 +84,56 @@ class ConditionalDenoisingDecoder(nn.Module):
         target_seq_len: int | None = None,
     ) -> torch.Tensor:
         """
-        Predict target embeddings conditioned on encoded sequence and timestep.
+        Forward pass matching authors' implementation.
 
         Args:
             t: (batch_size,) timestep indices
             encoded_seq: (batch_size, seq_len, embedding_dim) encoded sequence from encoder
-            padding_mask: (batch_size, seq_len) boolean mask (True = valid, False = padding)
-            target_seq_len: Length of output sequence (defaults to encoded_seq length)
+            padding_mask: (batch_size, seq_len) True = valid, False = padding
+            target_seq_len: Optional target sequence length (defaults to encoded_seq length)
 
         Returns:
-            x_pred: (batch_size, target_seq_len, embedding_dim) predicted target embeddings
+            x_pred: (batch_size, seq_len, embedding_dim) predicted target embeddings
         """
         batch_size = encoded_seq.size(0)
+        seq_len = encoded_seq.size(1)
+
         if target_seq_len is None:
-            target_seq_len = encoded_seq.size(1)
+            target_seq_len = seq_len
 
         # Embed timestep: (batch_size, embedding_dim)
         t_emb = self.time_embed(t)
 
-        # Expand timestep embedding to target sequence length
-        # This serves as the query for cross-attention
-        query = t_emb.unsqueeze(1).expand(-1, target_seq_len, -1)
-        query = self.layer_norm(query)
+        # Expand timestep to sequence length: (batch_size, seq_len, embedding_dim)
+        # This matches what authors do: time_ids = t.unsqueeze(1).expand(...)
+        time_emb = t_emb.unsqueeze(1).expand(-1, seq_len, -1)
 
-        # Apply cross-attention layers
-        # Query: timestep embedding, Key/Value: encoded sequence
-        for layer in self.cross_attention_layers:
-            query = layer(query, encoded_seq, padding_mask)
+        # Convert padding_mask for PyTorch convention
+        # Our convention: True = valid, False = padding
+        # PyTorch expects: True = masked (ignored), False = valid
+        if padding_mask is not None:
+            # Invert: True → False (valid), False → True (masked)
+            key_padding_mask = ~padding_mask
+        else:
+            key_padding_mask = None
 
-        # Predict target embeddings: (batch_size, target_seq_len, embedding_dim)
-        x_pred = self.output_proj(query)
-
-        return x_pred
-
-
-class CrossAttentionLayer(nn.Module):
-    """Single cross-attention layer with residual connection"""
-
-    def __init__(self, embedding_dim: int, num_heads: int, dropout: float):
-        super().__init__()
-
-        self.cross_attention = nn.MultiheadAttention(
-            embed_dim=embedding_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
+        # TransformerDecoder forward:
+        # tgt=conditional_emb (encoded sequence)
+        # memory=time_emb (timestep embeddings)
+        #
+        # Flow:
+        # 1. Self-attention: conditional_emb attends to itself
+        # 2. Cross-attention: Q=conditional_emb', K/V=time_emb
+        # 3. FFN
+        # 4. Output: refined embeddings (same shape as tgt)
+        output = self.decoder(
+            tgt=encoded_seq,
+            memory=time_emb,
+            tgt_key_padding_mask=key_padding_mask,
+            memory_key_padding_mask=key_padding_mask,
         )
 
-        self.feed_forward = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim * 4),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(embedding_dim * 4, embedding_dim),
-        )
+        # Apply final layer norm (authors do this)
+        output = self.layer_norm(output)
 
-        self.layer_norm1 = nn.LayerNorm(embedding_dim)
-        self.layer_norm2 = nn.LayerNorm(embedding_dim)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(
-        self,
-        query: torch.Tensor,
-        key_value: torch.Tensor,
-        key_padding_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """
-        Args:
-            query: (batch_size, query_len, embedding_dim) queries from timestep embedding
-            key_value: (batch_size, seq_len, embedding_dim) encoded sequence
-            key_padding_mask: (batch_size, seq_len) mask for padding
-
-        Returns:
-            output: (batch_size, query_len, embedding_dim)
-        """
-        query_len = query.size(1)
-        key_len = key_value.size(1)
-
-        # Create causal mask for autoregressive cross-attention only when
-        # query and key have the same sequence length (training case).
-        # During inference, query_len=1 and key_len=seq_len, so we skip the causal mask
-        # and allow the single query position to attend to the full history.
-        causal_mask = None
-        use_is_causal = False
-        if query_len == key_len:
-            # Position i in query can only attend to positions 0...i in key_value
-            # Use boolean mask: True for positions to ignore (future), False for allowed (past/present)
-            causal_mask = nn.Transformer.generate_square_subsequent_mask(
-                query_len, device=query.device, dtype=torch.bool
-            )
-            use_is_causal = True
-
-        # Convert key_padding_mask for PyTorch MultiheadAttention convention
-        # Input key_padding_mask: True = valid, False = padding
-        # PyTorch expects: True = masked, False = valid
-        # Keep as boolean to match causal_mask dtype and avoid warnings
-        padding_mask = None
-        if key_padding_mask is not None:
-            padding_mask = ~key_padding_mask  # Invert: True = ignore (padding), False = valid
-
-        attn_output, _ = self.cross_attention(
-            query=query,
-            key=key_value,
-            value=key_value,
-            attn_mask=causal_mask,  # Causal mask for autoregressive property (training only)
-            key_padding_mask=padding_mask,  # Padding mask
-            is_causal=use_is_causal,  # Hint for better performance when using causal mask
-        )
-
-        query = self.layer_norm1(query + self.dropout(attn_output))
-
-        # Feed-forward with residual
-        ff_output = self.feed_forward(query)
-        query = self.layer_norm2(query + self.dropout(ff_output))
-
-        return query
+        return output

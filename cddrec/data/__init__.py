@@ -14,6 +14,7 @@ from .preprocessing import (
     load_processed_data,
     load_id_mappings,
     create_reverse_mappings,
+    convert_to_author_format,
 )
 from .types import (
     SplitData,
@@ -41,6 +42,7 @@ __all__ = [
     "load_processed_data",
     "load_id_mappings",
     "create_reverse_mappings",
+    "convert_to_author_format",
     # Types
     "SplitData",
     "ProcessedData",
